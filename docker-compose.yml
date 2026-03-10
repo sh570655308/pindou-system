@@ -1,0 +1,47 @@
+# 品豆系统 Docker Compose 配置
+#
+# 快速部署：
+#   docker compose up -d
+#
+# 如需自定义配置，可创建 .env 文件或直接修改下方环境变量
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 如果 Alpine 有兼容性问题，可以使用 Debian 版本：
+      # dockerfile: Dockerfile.debian
+    container_name: pindou-system
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      # JWT 密钥 - 请务必修改为强密码！
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-/api}
+      - DATA_DIR=/app/data/database
+      - UPLOADS_DIR=/app/data/uploads
+      # OCR API 配置（图纸物料识别功能）
+      # 如不配置，OCR 功能将不可用，但其他功能正常
+      - OCR_API_KEY=${OCR_API_KEY:-}
+      - OCR_API_URL=${OCR_API_URL:-https://api.siliconflow.cn/v1}
+      - OCR_SPACE_API_KEY=${OCR_SPACE_API_KEY:-}
+    volumes:
+      # 数据持久化
+      - ./data/database:/app/data/database
+      - ./data/uploads:/app/data/uploads
+    networks:
+      - pindou-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/auth/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  pindou-network:
+    driver: bridge

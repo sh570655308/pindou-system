@@ -1,0 +1,86 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build outputs
+client/build/
+dist/
+
+# Database files (using volumes)
+server/database.sqlite
+*.sqlite
+
+# Upload files (using volumes)
+server/uploads/
+server/drawings/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files (包含敏感API密钥)
+test-*.js
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
+
+# Documentation (可选，减小镜像体积)
+# README.md
+# *.md
+
+# Docker files
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Data directory (using volumes)
+data/
+
+# Claude Code 配置
+.claude/
+
+# 临时文件
+nul
+*.tmp
+*.temp
+
+# OCR 训练数据
+*.traineddata
+
+# 测试图片
+ocr*.png
+
+# 部署包
+*.zip
+*.tar.gz
+
+# 工作区配置
+*.code-workspace
+
+# Python 缓存
+__pycache__/
+*.pyc

@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build outputs
+client/build/
+dist/
+
+# Database files
+database.sqlite
+*.sqlite
+server/database.sqlite
+
+# Upload files
+server/uploads/
+server/drawings/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker data directory
+data/database/
+data/uploads/
+
+# Deployment packages
+pindou-system-deploy-*.tar.gz
+pindou-system-deploy-*.zip
+pindou-system-deploy-*/
+pindou-deploy-*.zip
+
+# Test files (包含敏感API密钥)
+test-*.js
+ocr*.png
+
+# 自用配置文件（包含实际密钥，不发布）
+docker-compose.self.yml
+.env.self
+
+# Claude Code 配置
+.claude/
+
+# 临时文件
+nul
+*.tmp
+*.temp
+
+# OCR 训练数据（不发布，用户可自行下载）
+*.traineddata
+
+# 工作区配置
+*.code-workspace
+
+# Python 虚拟环境
+__pycache__/
+*.pyc
+.env/
+venv/

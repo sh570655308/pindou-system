@@ -1,0 +1,69 @@
+# Debian 版本 Dockerfile (推荐用于网络不稳定的环境)
+# 多阶段构建 Dockerfile
+# 阶段1: 构建前端
+FROM node:18-bullseye-slim AS frontend-builder
+
+WORKDIR /app/client
+
+# 安装系统依赖（用于前端构建）
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置 npm 国内镜像（可选，用于网络问题）
+RUN npm config set registry https://registry.npmmirror.com
+
+# 复制前端依赖文件
+COPY client/package*.json ./
+
+# 安装前端依赖（包括 devDependencies，构建需要）
+RUN npm ci || npm install --no-audit --no-fund
+
+# 复制前端源代码
+COPY client/ ./
+
+# 构建前端
+RUN npm run build
+
+# 阶段2: 运行后端（包含前端构建产物）
+FROM node:18-bullseye-slim
+
+WORKDIR /app
+
+# 安装系统依赖（sqlite3 需要）
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 配置 npm 国内镜像（可选）
+RUN npm config set registry https://registry.npmmirror.com
+
+# 复制后端依赖文件
+COPY package*.json ./
+
+# 安装后端依赖
+RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
+
+# 复制后端源代码
+COPY server/ ./server/
+
+# 从构建阶段复制前端构建产物
+COPY --from=frontend-builder /app/client/build ./server/public
+
+# 创建数据目录
+RUN mkdir -p /app/data/database /app/data/uploads
+
+# 暴露端口
+EXPOSE 5000
+
+# 设置环境变量
+ENV NODE_ENV=production
+ENV PORT=5000
+
+# 启动应用
+CMD ["node", "server/index.js"]
