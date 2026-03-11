@@ -359,32 +359,8 @@ function initializeDatabase() {
 
     // 初始化默认管理员账户（密码: admin123）
     const defaultAdminPassword = bcrypt.hashSync('admin123', 10);
-    db.run(`INSERT OR IGNORE INTO users (username, password, role) 
+    db.run(`INSERT OR IGNORE INTO users (username, password, role)
             VALUES ('admin', ?, 'admin')`, [defaultAdminPassword]);
-
-    // 初始化默认库存大类
-    const defaultCategories = ['MARD', 'COCO', 'ManMan', 'PanPan', 'MiXiaoWo'];
-    const stmt = db.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)');
-    defaultCategories.forEach(cat => stmt.run(cat));
-    stmt.finalize();
-
-    // 初始化默认产品（示例数据 - MARD类别下的A01-A18）
-    db.get('SELECT id FROM categories WHERE name = ?', ['MARD'], (err, category) => {
-      if (category) {
-        const products = [];
-        for (let i = 1; i <= 18; i++) {
-          const code = `A${String(i).padStart(2, '0')}`;
-          products.push({ category_id: category.id, code: code, color_code: code });
-        }
-        const productStmt = db.prepare('INSERT OR IGNORE INTO products (category_id, code, color_code, color_hex) VALUES (?, ?, ?, ?)');
-        products.forEach(prod => {
-          // 为每个产品分配一个示例颜色
-          const colorHex = getDefaultColorHex(prod.code);
-          productStmt.run(prod.category_id, prod.code, prod.color_code, colorHex);
-        });
-        productStmt.finalize();
-      }
-    });
 
     // 初始化预警阈值
     db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('warning_threshold', '300')`);
