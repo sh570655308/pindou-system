@@ -4,8 +4,13 @@ const path = require('path');
 const fs = require('fs');
 
 // 支持通过环境变量配置数据目录（Docker 部署时使用）
-const dataDir = process.env.DATA_DIR || __dirname;
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '../data/database');
 const dbPath = path.join(dataDir, 'database.sqlite');
+
+// 确保数据目录存在
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 const db = new sqlite3.Database(dbPath);
 
 // 创建上传目录
