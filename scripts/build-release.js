@@ -52,7 +52,22 @@ execSync('npm install --production', { cwd: path.join(RELEASE_DIR, 'app'), stdio
 
 // 复制 server 目录
 console.log('\n[3/6] 复制后端代码...');
-cpSync(path.join(ROOT_DIR, 'server'), path.join(RELEASE_DIR, 'app', 'server'), { recursive: true });
+const serverDest = path.join(RELEASE_DIR, 'app', 'server');
+cpSync(path.join(ROOT_DIR, 'server'), serverDest, { recursive: true });
+
+// 删除上传目录和数据库文件（用户数据不应该包含在发布包中）
+const uploadsPath = path.join(serverDest, 'uploads');
+if (existsSync(uploadsPath)) {
+  rmSync(uploadsPath, { recursive: true });
+}
+// 重新创建空的 uploads 目录
+mkdirSync(path.join(serverDest, 'uploads', 'drawings'), { recursive: true });
+
+// 删除数据库文件
+const dbFile = path.join(serverDest, 'database.sqlite');
+if (existsSync(dbFile)) {
+  rmSync(dbFile);
+}
 
 // 3. 下载便携版 Node.js
 console.log('\n[4/6] 下载便携版 Node.js...');
