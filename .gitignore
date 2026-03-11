@@ -53,7 +53,9 @@ ocr*.png
 
 # 自用配置文件（包含实际密钥，不发布）
 docker-compose.self.yml
+*.self.yml
 .env.self
+*.self
 
 # Claude Code 配置
 .claude/

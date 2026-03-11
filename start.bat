@@ -70,6 +70,13 @@ if exist "client\package.json" (
     ) else (
         echo [2/3] 前端依赖已安装
     )
+) else (
+    if exist "client" (
+        echo [错误] client\package.json 不存在，请检查 client 目录是否完整
+    ) else (
+        echo [错误] client 目录不存在，请确保项目完整克隆
+    )
+    echo [跳过] 前端依赖安装
 )
 
 echo.
