@@ -1,7 +1,7 @@
-const { execSync, cpSync, mkdirSync, rmSync, existsSync, writeFileSync, readdirSync, statSync } = require('fs');
+const { execSync } = require('child_process');
+const { cpSync, mkdirSync, rmSync, existsSync, writeFileSync, readdirSync, statSync, createWriteStream } = require('fs');
 const path = require('path');
 const https = require('https');
-const { createWriteStream } = require('fs');
 const { pipeline } = require('stream');
 const { promisify } = require('util');
 const streamPipeline = promisify(pipeline);
@@ -33,7 +33,7 @@ try {
   cpSync(buildSrc, publicDest, { recursive: true });
   console.log('前端构建完成');
 } catch (error) {
-  console.error('前端构建失败');
+  console.error('前端构建失败:', error.message);
   process.exit(1);
 }
 
@@ -62,27 +62,26 @@ const nodeExtractPath = path.join(RELEASE_DIR, 'node-temp');
 async function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
     const file = createWriteStream(dest);
-    https.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        https.get(response.headers.location, (redirectResponse) => {
-          redirectResponse.pipe(file);
+    const request = (url) => {
+      https.get(url, (response) => {
+        if (response.statusCode === 302 || response.statusCode === 301) {
+          request(response.headers.location);
+        } else if (response.statusCode === 200) {
+          response.pipe(file);
           file.on('finish', () => {
             file.close();
             resolve();
           });
-        }).on('error', reject);
-      } else {
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          resolve();
-        });
-      }
-    }).on('error', reject);
+        } else {
+          reject(new Error(`HTTP ${response.statusCode}`));
+        }
+      }).on('error', reject);
+    };
+    request(url);
   });
 }
 
-async function downloadNode() {
+async function main() {
   try {
     await downloadFile(NODE_URL, nodeZipPath);
     console.log('Node.js 下载完成');
@@ -91,9 +90,7 @@ async function downloadNode() {
     console.log('请手动下载 Node.js 便携版并解压到 release/node 目录');
     process.exit(1);
   }
-}
 
-downloadNode().then(() => {
   // 解压 Node.js
   console.log('解压 Node.js...');
   mkdirSync(nodeExtractPath, { recursive: true });
@@ -155,7 +152,6 @@ pause
   // 7. 删除不必要的文件以减小体积
   console.log('\n清理不必要的文件...');
 
-  // 删除 app/node_modules 中的不必要的文件
   const nodeModulesPath = path.join(RELEASE_DIR, 'app', 'node_modules');
   if (existsSync(nodeModulesPath)) {
     const modulesToClean = readdirSync(nodeModulesPath);
@@ -164,7 +160,6 @@ pause
       try {
         const stat = statSync(modPath);
         if (stat.isDirectory()) {
-          // 删除 .github, test, tests, examples, docs 等目录
           const dirsToRemove = ['.github', 'test', 'tests', 'examples', 'docs', 'example', 'benchmark'];
           dirsToRemove.forEach(dir => {
             const dirPath = path.join(modPath, dir);
@@ -172,14 +167,15 @@ pause
               rmSync(dirPath, { recursive: true });
             }
           });
-          // 删除 *.md, *.ts, *.map 等文件
           const files = readdirSync(modPath);
           files.forEach(file => {
             if (file.endsWith('.md') || file.endsWith('.ts') || file.endsWith('.map') || file.endsWith('.markdown')) {
               const filePath = path.join(modPath, file);
-              if (statSync(filePath).isFile()) {
-                rmSync(filePath);
-              }
+              try {
+                if (statSync(filePath).isFile()) {
+                  rmSync(filePath);
+                }
+              } catch (e) {}
             }
           });
         }
@@ -199,4 +195,6 @@ pause
   console.log('  ├── start.bat      (启动脚本)');
   console.log('  └── 说明文档');
   console.log('\n用户只需双击 start.bat 即可启动服务');
-});
+}
+
+main();
