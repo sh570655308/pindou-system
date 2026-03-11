@@ -12,6 +12,8 @@ const DEFAULT_BRUSHES: BrushPreset[] = [
   { id: 1, name: '画笔1', color: null, productId: null, size: 1 },
   { id: 2, name: '画笔2', color: null, productId: null, size: 1 },
   { id: 3, name: '画笔3', color: null, productId: null, size: 1 },
+  { id: 4, name: '画笔4', color: null, productId: null, size: 1 },
+  { id: 5, name: '画笔5', color: null, productId: null, size: 1 },
 ];
 
 const STORAGE_KEY = 'pixelate_brush_presets';
