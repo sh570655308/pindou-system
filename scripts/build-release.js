@@ -141,7 +141,7 @@ echo   启动服务中...
 echo.
 
 cd /d "%~dp0app"
-"..\\node\\node.exe" server/index.js
+"%~dp0node\\node.exe" server/index.js
 
 echo.
 echo  ================================================================
@@ -150,6 +150,30 @@ echo  ================================================================
 pause
 `;
   writeFileSync(path.join(RELEASE_DIR, 'start.bat'), startBat);
+
+  const stopBat = `@echo off
+chcp 65001 >nul 2>&1
+cls
+echo.
+echo  ================================================================
+echo    停止服务
+echo  ================================================================
+echo.
+
+echo 正在停止 Node.js 进程...
+taskkill /f /im node.exe 2>nul
+
+if %errorlevel% equ 0 (
+    echo 服务已停止
+) else (
+    echo 没有找到运行中的 Node.js 进程
+)
+
+echo.
+echo  ================================================================
+pause
+`;
+  writeFileSync(path.join(RELEASE_DIR, 'stop.bat'), stopBat);
 
   // 6. 复制配置文件和文档
   if (existsSync(path.join(ROOT_DIR, 'env.example'))) {
