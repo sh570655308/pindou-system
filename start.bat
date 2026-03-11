@@ -60,7 +60,7 @@ if exist "client\package.json" (
     if not exist "client\node_modules" (
         echo [2/3] 正在安装前端依赖...
         pushd client
-        call npm install --production
+        call npm install
         popd
         if %errorlevel% neq 0 (
             echo [警告] 前端依赖安装失败，但将继续启动...
@@ -102,6 +102,3 @@ echo   停止服务: 运行 stop.bat
 echo   查看日志: server\logs\server.log 和 client\logs\client.log
 echo.
 echo  ================================================================
-echo.
-echo 按任意键退出此窗口（服务将继续在后台运行）...
-pause >nul
