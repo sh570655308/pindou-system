@@ -17,19 +17,18 @@ git clone https://github.com/sh570655308/pindou-system.git
 cd pindou-system
 ```
 
-### 步骤 3: 配置环境变量（可选）
+### 步骤 3: 配置环境变量
 
 ```bash
 cp env.example .env
 ```
 
-编辑 `.env` 文件：
+编辑 `.env` 文件，修改以下配置：
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| PORT | 服务端口 | 5000 |
-| JWT_SECRET | JWT 密钥 | 随机字符串 |
-| OCR_API_KEY | OCR API 密钥 | 无 |
+| 变量 | 说明 | 是否必填 |
+|------|------|----------|
+| JWT_SECRET | 用于加密用户登录凭证的密钥，请修改为任意随机字符串 | 推荐 |
+| OCR_API_KEY | OCR 识别 API 密钥，用于图纸物料识别功能 | 可选 |
 
 ### 步骤 4: 启动服务
 
@@ -44,6 +43,22 @@ docker compose up -d
 浏览器访问：http://localhost:5000
 
 默认账号：`admin` / `admin123`
+
+---
+
+## OCR API 配置（可选）
+
+OCR 功能用于从图纸图片中自动识别物料代码和数量。
+
+### 获取 API Key
+
+推荐使用硅基流动的 DeepSeek-OCR 模型（目前免费）：
+
+1. 访问 [硅基流动](https://cloud.siliconflow.cn/i/QIYTYm6u) 注册账号
+2. 进入控制台获取 API Key
+3. 将 API Key 填入 `.env` 文件的 `OCR_API_KEY=`
+
+不配置 OCR API 不影响其他功能使用。
 
 ---
 
