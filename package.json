@@ -4,6 +4,7 @@
   "description": "拼豆库存管理系统",
   "main": "server/index.js",
   "scripts": {
+    "start": "node server/index.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server/index.js",
     "client": "cd client && npm start",

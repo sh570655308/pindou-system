@@ -85,7 +85,7 @@ echo.
 
 REM 启动后端服务（后台运行）
 echo [后端] 启动中... 端口 5000
-start /b "" npm run dev > "server\logs\server.log" 2>&1
+start /b "" npm start > "server\logs\server.log" 2>&1
 
 REM 等待后端启动
 timeout /t 5 /nobreak >nul 2>&1
