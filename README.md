@@ -7,9 +7,14 @@
 ### Windows 本地运行
 
 1. 安装 [Node.js 18+](https://nodejs.org/)
-2. （可选）配置 OCR API：复制 `env.example` 为 `.env`，填入 API Key
+2. 获取项目
+```bash
+git clone https://github.com/sh570655308/pindou-system.git
+cd pindou-system
+```
 3. 双击 `start.bat` 启动服务
 4. 浏览器访问 http://localhost:3000
+5. （可选）配置 OCR API：记事本打开`.env`，填入 API Key
 
 停止服务：双击 `stop.bat`
 
