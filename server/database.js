@@ -3,8 +3,20 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const fs = require('fs');
 
+// 获取基础目录（支持 pkg 打包）
+const getBaseDir = () => {
+  // pkg 打包后 process.pkg 存在，使用程序运行目录
+  if (process.pkg) {
+    return path.dirname(process.execPath);
+  }
+  // 开发环境使用源码目录的上级
+  return path.join(__dirname, '..');
+};
+
+const baseDir = getBaseDir();
+
 // 支持通过环境变量配置数据目录（Docker 部署时使用）
-const dataDir = process.env.DATA_DIR || path.join(__dirname, '../data/database');
+const dataDir = process.env.DATA_DIR || path.join(baseDir, 'data/database');
 const dbPath = path.join(dataDir, 'database.sqlite');
 
 // 确保数据目录存在
@@ -14,7 +26,7 @@ if (!fs.existsSync(dataDir)) {
 const db = new sqlite3.Database(dbPath);
 
 // 创建上传目录
-const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
+const uploadsDir = process.env.UPLOADS_DIR || path.join(baseDir, 'server/uploads');
 const drawingsDir = path.join(uploadsDir, 'drawings');
 
 if (!fs.existsSync(uploadsDir)) {

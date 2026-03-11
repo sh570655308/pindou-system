@@ -45,7 +45,14 @@ app.use('/api/sales_orders', require('./routes/sales_orders'));
 
 
 // 服务前端构建后的静态文件（生产环境）
-const publicPath = path.join(__dirname, 'public');
+// 支持pkg打包：打包后静态文件在程序目录的 public 下
+const getPublicPath = () => {
+  if (process.pkg) {
+    return path.join(path.dirname(process.execPath), 'public');
+  }
+  return path.join(__dirname, 'public');
+};
+const publicPath = getPublicPath();
 const fs = require('fs');
 if (fs.existsSync(publicPath)) {
   app.use(express.static(publicPath));

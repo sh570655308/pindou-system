@@ -47,6 +47,9 @@ pindou-system-deploy-*.zip
 pindou-system-deploy-*/
 pindou-deploy-*.zip
 
+# Release build
+release/
+
 # Test files (包含敏感API密钥)
 test-*.js
 ocr*.png

@@ -1,15 +1,36 @@
 {
-  "name": "inventory-management-system",
+  "name": "pindou-system",
   "version": "1.0.0",
   "description": "拼豆库存管理系统",
   "main": "server/index.js",
+  "bin": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "nodemon server/index.js",
     "client": "cd client && npm start",
     "build": "cd client && npm run build",
-    "install-all": "npm install && cd client && npm install"
+    "install-all": "npm install && cd client && npm install",
+    "build:release": "node scripts/build-release.js"
+  },
+  "pkg": {
+    "targets": ["node18-win-x64"],
+    "outputPath": "release",
+    "assets": [
+      "server/**/*",
+      "node_modules/sqlite3/**/*",
+      "node_modules/bcryptjs/**/*",
+      "node_modules/express/**/*",
+      "node_modules/cors/**/*",
+      "node_modules/jsonwebtoken/**/*",
+      "node_modules/multer/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/dotenv/**/*",
+      "node_modules/axios/**/*",
+      "node_modules/form-data/**/*",
+      "node_modules/archiver/**/*",
+      "node_modules/tesseract.js/**/*"
+    ]
   },
   "keywords": [
     "inventory",
@@ -33,6 +54,7 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "pkg": "^5.8.1"
   }
 }
