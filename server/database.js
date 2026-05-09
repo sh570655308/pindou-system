@@ -216,6 +216,19 @@ function initializeDatabase() {
     // 索引：便于按用户/图纸查询完工记录
     db.run(`CREATE INDEX IF NOT EXISTS idx_completion_records_user_id ON completion_records(user_id)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_completion_records_drawing_id ON completion_records(drawing_id)`);
+    // 完工记录物料快照表（存储完工时的物料清单，用于撤销时按原始数量回退）
+    db.run(`CREATE TABLE IF NOT EXISTS completion_material_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      completion_record_id INTEGER NOT NULL,
+      product_id INTEGER NOT NULL,
+      material_qty REAL NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (completion_record_id) REFERENCES completion_records(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    )`);
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_completion_snapshots_record_id ON completion_material_snapshots(completion_record_id)`);
+
     // 尝试添加 completed_at 和 satisfaction 字段（如果表已存在但没有这些字段）
     db.run(`ALTER TABLE completion_records ADD COLUMN completed_at DATETIME DEFAULT CURRENT_TIMESTAMP`, (err) => {
       // 忽略错误（字段已存在或其他错误）

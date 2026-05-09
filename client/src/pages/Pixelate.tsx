@@ -138,6 +138,8 @@ const PixelatePage: React.FC = () => {
   const [previewPos, setPreviewPos] = useLocalStorageState<{ left: number; top: number }>('pixelate-previewPos', { left: 24, top: Math.max(40, typeof window !== 'undefined' ? window.innerHeight - 200 : 200) });
   const [pastePreviewPos, setPastePreviewPos] = useLocalStorageState<{ left: number; top: number }>('pixelate-pastePreviewPos', { left: 24, top: 24 });
   const [showMaterialCodes, setShowMaterialCodes] = useLocalStorageState<boolean>('pixelate-showMaterialCodes', false);
+  // gridOffset: 虚拟坐标偏移量，pixels[0][0] 对应的虚拟坐标是 (gridOffset.row, gridOffset.col)
+  const [gridOffset, setGridOffset] = useLocalStorageState<{ row: number; col: number }>('pixelate-gridOffset', { row: 0, col: 0 });
   const previewDrag = React.useRef<{ dragging: boolean; startX: number; startY: number } | null>(null);
 
   // 持久化文件信息（用于刷新功能）
@@ -928,19 +930,26 @@ const PixelatePage: React.FC = () => {
   const handleDeleteSelection = () => {
     if (selectionState.selectedCells.size === 0) return;
 
-    // ensure pixel matrix covers selection bounds
+    // ensure pixel matrix covers selection bounds (virtual coords → array indices)
     let maxR = -Infinity;
     let maxC = -Infinity;
+    let minR = Infinity;
+    let minC = Infinity;
     selectionState.selectedCells.forEach(k => {
       const [rs, cs] = k.split(',');
-      const r = parseInt(rs, 10);
-      const c = parseInt(cs, 10);
+      const r = parseInt(rs, 10) - gridOffset.row;
+      const c = parseInt(cs, 10) - gridOffset.col;
       if (!Number.isNaN(r) && !Number.isNaN(c)) {
         if (r > maxR) maxR = r;
         if (c > maxC) maxC = c;
+        if (r < minR) minR = r;
+        if (c < minC) minC = c;
       }
     });
-    const ensured = (maxR >= 0 && maxC >= 0) ? expandPixelsToInclude(activeLayerPixels, maxR, maxC) : activeLayerPixels.map(row => row.map(cell => ({ ...cell })));
+    const expandResult = expandPixelsToInclude(activeLayerPixels, maxR, maxC, Math.min(minR, 0), Math.min(minC, 0));
+    const ensured = expandResult.pixels;
+    const shiftR = expandResult.shiftR;
+    const shiftC = expandResult.shiftC;
 
     // 更新删除mask
     const newDeletionMask = new Map(deletionMask);
@@ -951,9 +960,12 @@ const PixelatePage: React.FC = () => {
       const [rowStr, colStr] = cellKey.split(',');
       const row = parseInt(rowStr, 10);
       const col = parseInt(colStr, 10);
-      if (!Number.isNaN(row) && !Number.isNaN(col) && ensured[row] && typeof ensured[row][col] !== 'undefined') {
-        ensured[row][col].hex = null;
-        ensured[row][col].productId = null;
+      // 虚拟坐标转数组索引
+      const eRow = row - gridOffset.row + shiftR;
+      const eCol = col - gridOffset.col + shiftC;
+      if (!Number.isNaN(row) && !Number.isNaN(col) && ensured[eRow] && typeof ensured[eRow][eCol] !== 'undefined') {
+        ensured[eRow][eCol].hex = null;
+        ensured[eRow][eCol].productId = null;
 
         // 记录删除操作
         newDeletionMask.set(cellKey, true);
@@ -964,7 +976,10 @@ const PixelatePage: React.FC = () => {
 
     saveToHistory();
 
-    setPixels(ensured);
+    setPixels(ensured, shiftR, shiftC);
+    if (shiftR !== 0 || shiftC !== 0) {
+      setGridOffset(prev => ({ row: prev.row - shiftR, col: prev.col - shiftC }));
+    }
     setDeletionMask(newDeletionMask);
     setColorOverrides(newColorOverrides);
 
@@ -1017,7 +1032,10 @@ const PixelatePage: React.FC = () => {
     // 确保像素矩阵足够大
     const maxRow = targetRow + clipboard.height - 1;
     const maxCol = targetCol + clipboard.width - 1;
-    const ensured = expandPixelsToInclude(activeLayerPixels, maxRow, maxCol);
+    const expandResult = expandPixelsToInclude(activeLayerPixels, maxRow, maxCol, Math.min(targetRow, 0), Math.min(targetCol, 0));
+    const ensured = expandResult.pixels;
+    const shiftR = expandResult.shiftR;
+    const shiftC = expandResult.shiftC;
 
     // 应用粘贴
     const newColorOverrides = new Map(colorOverrides);
@@ -1025,15 +1043,17 @@ const PixelatePage: React.FC = () => {
 
     clipboard.pixels.forEach((cell, relKey) => {
       const [relRow, relCol] = relKey.split(',').map(Number);
-      const row = targetRow + relRow;
-      const col = targetCol + relCol;
+      const row = targetRow + relRow + shiftR;
+      const col = targetCol + relCol + shiftC;
 
       if (row >= 0 && row < ensured.length && col >= 0 && col < ensured[row].length) {
         ensured[row][col].hex = cell.hex;
         ensured[row][col].productId = cell.productId;
 
-        // 记录改色操作
-        const cellKey = `${row},${col}`;
+        // 记录改色操作（使用虚拟坐标）
+        const vRow = targetRow + relRow;
+        const vCol = targetCol + relCol;
+        const cellKey = `${vRow},${vCol}`;
         newColorOverrides.set(cellKey, {
           hex: cell.hex || '',
           productId: cell.productId
@@ -1045,13 +1065,19 @@ const PixelatePage: React.FC = () => {
 
     saveToHistory();
 
-    setPixels(ensured);
+    setPixels(ensured, shiftR, shiftC);
+    if (shiftR !== 0 || shiftC !== 0) {
+      setGridOffset(prev => ({ row: prev.row - shiftR, col: prev.col - shiftC }));
+    }
     setColorOverrides(newColorOverrides);
     setDeletionMask(newDeletionMask);
   };
 
   // 用于跟踪画笔绘画状态的 ref
   const brushDrawingRef = useRef(false);
+  // 缓存最新的活跃图层像素，确保快速连续绘制时不会因 React 异步渲染丢失数据
+  const latestPixelsRef = useRef<PixelCell[][]>(activeLayerPixels);
+  latestPixelsRef.current = activeLayerPixels;
 
   // 画笔绘画处理
   const handleBrushDraw = (cells: Array<{ row: number; col: number }>) => {
@@ -1066,28 +1092,39 @@ const PixelatePage: React.FC = () => {
       brushDrawingRef.current = true;
     }
 
-    // 确保像素矩阵覆盖所有绘画区域
+    // 确保像素矩阵覆盖所有绘画区域（cells 是虚拟坐标，需转为数组索引）
+    // 使用 ref 获取最新像素数据，避免快速连续绘制时数据丢失
+    const currentPixels = latestPixelsRef.current;
     let maxR = -Infinity;
     let maxC = -Infinity;
+    let minR = Infinity;
+    let minC = Infinity;
     cells.forEach(({ row, col }) => {
-      if (row > maxR) maxR = row;
-      if (col > maxC) maxC = col;
+      const arrRow = row - gridOffset.row;
+      const arrCol = col - gridOffset.col;
+      if (arrRow > maxR) maxR = arrRow;
+      if (arrCol > maxC) maxC = arrCol;
+      if (arrRow < minR) minR = arrRow;
+      if (arrCol < minC) minC = arrCol;
     });
 
-    const ensured = (maxR >= 0 && maxC >= 0)
-      ? expandPixelsToInclude(activeLayerPixels, maxR, maxC)
-      : activeLayerPixels.map(row => row.map(cell => ({ ...cell })));
+    const expandResult = expandPixelsToInclude(currentPixels, maxR, maxC, Math.min(minR, 0), Math.min(minC, 0));
+    const ensured = expandResult.pixels;
+    const shiftR = expandResult.shiftR;
+    const shiftC = expandResult.shiftC;
 
     // 应用画笔颜色
     const newColorOverrides = new Map(colorOverrides);
     const newDeletionMask = new Map(deletionMask);
 
     cells.forEach(({ row, col }) => {
-      if (row >= 0 && row < ensured.length && col >= 0 && col < ensured[row].length) {
-        ensured[row][col].hex = activeBrush.color;
-        ensured[row][col].productId = activeBrush.productId;
+      const arrRow = row - gridOffset.row + shiftR;
+      const arrCol = col - gridOffset.col + shiftC;
+      if (arrRow >= 0 && arrRow < ensured.length && arrCol >= 0 && arrCol < ensured[arrRow].length) {
+        ensured[arrRow][arrCol].hex = activeBrush.color;
+        ensured[arrRow][arrCol].productId = activeBrush.productId;
 
-        // 记录改色操作
+        // 记录改色操作（使用虚拟坐标）
         const cellKey = `${row},${col}`;
         newColorOverrides.set(cellKey, {
           hex: activeBrush.color || '',
@@ -1098,7 +1135,13 @@ const PixelatePage: React.FC = () => {
       }
     });
 
-    setPixels(ensured);
+    // 立即更新 ref，确保下一次 handleBrushDraw 调用能拿到最新数据
+    latestPixelsRef.current = ensured;
+
+    setPixels(ensured, shiftR, shiftC);
+    if (shiftR !== 0 || shiftC !== 0) {
+      setGridOffset(prev => ({ row: prev.row - shiftR, col: prev.col - shiftC }));
+    }
     setColorOverrides(newColorOverrides);
     setDeletionMask(newDeletionMask);
   };
@@ -1106,6 +1149,35 @@ const PixelatePage: React.FC = () => {
   // 画笔完成时的回调 - 用于重置绘画状态
   const handleBrushEnd = () => {
     brushDrawingRef.current = false;
+  };
+
+  // 橡皮擦擦除处理
+  const handleBrushErase = (cells: Array<{ row: number; col: number }>) => {
+    if (!brushDrawingRef.current) {
+      saveToHistory();
+      brushDrawingRef.current = true;
+    }
+
+    const currentPixels = latestPixelsRef.current;
+    const ensured = currentPixels.map(row => row.map(cell => ({ ...cell })));
+
+    const newDeletionMask = new Map(deletionMask);
+
+    cells.forEach(({ row, col }) => {
+      const arrRow = row - gridOffset.row;
+      const arrCol = col - gridOffset.col;
+      if (arrRow >= 0 && arrRow < ensured.length && arrCol >= 0 && arrCol < ensured[arrRow].length) {
+        if (ensured[arrRow][arrCol].hex !== null) {
+          ensured[arrRow][arrCol].hex = null;
+          ensured[arrRow][arrCol].productId = null;
+          newDeletionMask.set(`${row},${col}`, true);
+        }
+      }
+    });
+
+    latestPixelsRef.current = ensured;
+    setPixels(ensured);
+    setDeletionMask(newDeletionMask);
   };
 
   // 打开画笔颜色选择器
@@ -1166,30 +1238,33 @@ const PixelatePage: React.FC = () => {
   };
 
   // expand pixels matrix so that it includes at least up to maxRow/maxCol (no negative handling)
-  const expandPixelsToInclude = (pxs: PixelCell[][], maxRow: number, maxCol: number) => {
+  const expandPixelsToInclude = (pxs: PixelCell[][], maxRow: number, maxCol: number, minRow: number = 0, minCol: number = 0): { pixels: PixelCell[][], shiftR: number, shiftC: number } => {
     const oldRows = pxs.length;
     const oldCols = pxs[0]?.length || 0;
-    const newRows = Math.max(oldRows, maxRow + 1);
-    const newCols = Math.max(oldCols, maxCol + 1);
-    if (newRows === oldRows && newCols === oldCols) {
-      // return a shallow clone to avoid mutating original
-      return pxs.map(row => row.map(cell => ({ ...cell })));
+
+    // Calculate expansion needed in each direction
+    const topPad = minRow < 0 ? -minRow : 0;
+    const leftPad = minCol < 0 ? -minCol : 0;
+    const newRows = topPad + Math.max(oldRows, maxRow + 1);
+    const newCols = leftPad + Math.max(oldCols, maxCol + 1);
+
+    if (newRows === oldRows && newCols === oldCols && topPad === 0 && leftPad === 0) {
+      return { pixels: pxs.map(row => row.map(cell => ({ ...cell }))), shiftR: 0, shiftC: 0 };
     }
+
     const newPixels: PixelCell[][] = [];
     for (let r = 0; r < newRows; r++) {
       const rowArr: PixelCell[] = [];
       for (let c = 0; c < newCols; c++) {
-        rowArr.push({ hex: null, productId: null });
+        const oldR = r - topPad;
+        const oldC = c - leftPad;
+        rowArr.push(oldR >= 0 && oldR < oldRows && oldC >= 0 && oldC < oldCols
+          ? { ...pxs[oldR][oldC] }
+          : { hex: null, productId: null });
       }
       newPixels.push(rowArr);
     }
-    // copy old
-    for (let r = 0; r < oldRows; r++) {
-      for (let c = 0; c < oldCols; c++) {
-        newPixels[r][c] = { ...pxs[r][c] };
-      }
-    }
-    return newPixels;
+    return { pixels: newPixels, shiftR: topPad, shiftC: leftPad };
   };
 
   // fill picker modal state & preview
@@ -1304,26 +1379,47 @@ const PixelatePage: React.FC = () => {
     options?: { format?: 'png' | 'jpeg'; quality?: number; minCellSize?: number; maxWidth?: number }
   ): Promise<Blob | null> => {
     try {
-      const cols = pxs[0]?.length || 0;
-      const rows = pxs.length || 0;
+      const totalCols = pxs[0]?.length || 0;
+      const totalRows = pxs.length || 0;
+
+      // Auto-crop: find bounding box of effective (colored) pixels
+      let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+      for (let r = 0; r < totalRows; r++) {
+        for (let c = 0; c < totalCols; c++) {
+          if (pxs[r]?.[c]?.hex) {
+            if (r < minR) minR = r;
+            if (r > maxR) maxR = r;
+            if (c < minC) minC = c;
+            if (c > maxC) maxC = c;
+          }
+        }
+      }
+
+      // If no colored pixels, return null
+      if (maxR < 0) return null;
+
+      // Add 1-cell margin around the content
+      const cropMinR = Math.max(0, minR - 1);
+      const cropMaxR = Math.min(totalRows - 1, maxR + 1);
+      const cropMinC = Math.max(0, minC - 1);
+      const cropMaxC = Math.min(totalCols - 1, maxC + 1);
+
+      const rows = cropMaxR - cropMinR + 1;
+      const cols = cropMaxC - cropMinC + 1;
+
       const padding = 12;
       const format = options?.format || exportFormat || 'jpeg';
       const quality = typeof options?.quality === 'number' ? options!.quality : (exportQuality || 0.85);
-      const minCellSize = options?.minCellSize || exportMinCellSize || 24; // 保持向后兼容
-      // cap exported canvas width to avoid creating extremely large files.
-      // Increase this value if you need higher-resolution exports (e.g., 2400 or 3000),
-      // but be mindful of memory and upload limits.
+      const minCellSize = options?.minCellSize || exportMinCellSize || 24;
       const maxWidth = options?.maxWidth || 2400;
 
-      // determine cellSize ensuring minimum per-cell pixels and not exceeding maxWidth
+      // determine cellSize
       let cellSize = Math.max(1, Math.floor(Math.min(maxWidth / Math.max(1, cols), Math.max(minCellSize, Math.floor((cols > 0 ? Math.ceil(800 / Math.max(1, cols)) : minCellSize))))));
-      // fallback ensure at least minCellSize
       cellSize = Math.max(minCellSize, cellSize);
-      // guard against extremely large images
       const topWidth = Math.min(maxWidth, cols * cellSize);
       const topHeight = rows * cellSize;
 
-      // header for axis labels (left and top)
+      // header for axis labels (virtual coordinates)
       const headerW = Math.max(36, Math.floor(cellSize * 1.6));
       const headerH = Math.max(24, Math.floor(cellSize * 1.2));
 
@@ -1425,10 +1521,12 @@ const PixelatePage: React.FC = () => {
       ctx.fillStyle = '#f9fafb';
       ctx.fillRect(contentOriginX, contentOriginY, topWidth, topHeight);
 
-      // draw pixel cells
+      // draw pixel cells (only cropped region)
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
-          const cell = pxs[r][c];
+          const origR = r + cropMinR;
+          const origC = c + cropMinC;
+          const cell = pxs[origR]?.[origC];
           if (!cell || !cell.hex) continue;
           ctx.fillStyle = cell.hex;
           ctx.fillRect(contentOriginX + c * cellSize, contentOriginY + r * cellSize, cellSize, cellSize);
@@ -1489,13 +1587,14 @@ const PixelatePage: React.FC = () => {
         ctx.stroke();
       }
 
-      // axis labels (top columns and left rows) with white background boxes
+      // axis labels with virtual coordinates
       const fontSize = Math.max(10, Math.floor(cellSize * 0.45));
       ctx.font = `${fontSize}px sans-serif`;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       for (let c = 0; c < cols; c++) {
-        const text = String(c + 1);
+        const virtualCol = (c + cropMinC) + gridOffset.col + 1;
+        const text = String(virtualCol);
         const x = contentOriginX + (c * cellSize + cellSize / 2);
         const y = padding + headerH / 2;
         const metrics = ctx.measureText(text);
@@ -1513,7 +1612,8 @@ const PixelatePage: React.FC = () => {
       }
       ctx.textAlign = 'right';
       for (let r = 0; r < rows; r++) {
-        const text = String(r + 1);
+        const virtualRow = (r + cropMinR) + gridOffset.row + 1;
+        const text = String(virtualRow);
         const y = contentOriginY + (r * cellSize + cellSize / 2);
         const metrics = ctx.measureText(text);
         const textW = metrics.width;
@@ -1928,7 +2028,9 @@ const PixelatePage: React.FC = () => {
                     showMaterialCodes={showMaterialCodes}
                     brushSettings={activeBrush}
                     onBrushDraw={handleBrushDraw}
+                    onBrushErase={handleBrushErase}
                     onBrushEnd={handleBrushEnd}
+                    gridOffset={gridOffset}
                     onCellSelect={(r, c, mode) => {
                       const key = `${r},${c}`;
                       const newSet = new Set(selectionState.selectedCells);

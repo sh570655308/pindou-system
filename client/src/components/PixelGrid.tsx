@@ -5,7 +5,7 @@ export type PixelCell = {
   productId?: number | null;
 };
 
-export type SelectionTool = 'hand' | 'free-select' | 'magic-wand' | 'color-select' | 'paste' | 'brush';
+export type SelectionTool = 'hand' | 'free-select' | 'magic-wand' | 'color-select' | 'paste' | 'brush' | 'eraser';
 
 export interface SelectionState {
   selectedCells: Set<string>; // 使用 "row,col" 作为key
@@ -34,14 +34,17 @@ interface PixelGridProps {
   onCellSelect?: (row: number, col: number, mode: 'add' | 'remove' | 'toggle' | 'rect' | 'flood' | 'color') => void;
   // 新增的材料信息，用于显示材料代码
   materials?: MaterialInfo[];
-  showMaterialCodes?: boolean; // 新增：是否显示物料代码开关
+  showMaterialCodes?: boolean;
   // 画笔相关
   brushSettings?: { color: string | null; productId: number | null; size: number };
   onBrushDraw?: (cells: Array<{ row: number; col: number }>) => void;
+  onBrushErase?: (cells: Array<{ row: number; col: number }>) => void;
   onBrushEnd?: () => void; // 画笔完成时的回调
-}
-
-const PixelGrid: React.FC<PixelGridProps> = ({
+  // 当需要调整 translate 时调用（数组扩展时保持视觉位置稳定）
+  onTranslateAdjust?: (dx: number, dy: number) => void;
+  // 虚拟坐标偏移：pixels[0][0] 对应的虚拟坐标
+  gridOffset?: { row: number; col: number };
+}const PixelGrid: React.FC<PixelGridProps> = ({
   pixels,
   cellSize = 20,
   gap = 0,
@@ -57,7 +60,10 @@ const PixelGrid: React.FC<PixelGridProps> = ({
   showMaterialCodes = false, // 默认为 false
   brushSettings = { color: null, productId: null, size: 1 },
   onBrushDraw,
+  onBrushErase,
   onBrushEnd,
+  onTranslateAdjust,
+  gridOffset = { row: 0, col: 0 },
 }) => {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -66,10 +72,11 @@ const PixelGrid: React.FC<PixelGridProps> = ({
   const [translate, setTranslate] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const panRef = useRef<{ dragging: boolean; startX: number; startY: number; moved?: boolean } | null>(null);
   const selectStartRef = useRef<{ row: number; col: number } | null>(null);
-  const brushDrawingRef = useRef<{ isDrawing: boolean; lastRow: number | null; lastCol: number | null }>({
+  // === 画笔/橡皮擦 共用状态 ===
+  const brushDrawingRef = useRef<{ isDrawing: boolean; lastRow: number; lastCol: number }>({
     isDrawing: false,
-    lastRow: null,
-    lastCol: null
+    lastRow: 0,
+    lastCol: 0
   });
 
   const rows = pixels.length;
@@ -84,9 +91,6 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     colStart: number;
     colEnd: number;
   } => {
-    const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-    const headerH = Math.max(24, Math.floor(cellSize * 1.2));
-
     // 获取容器尺寸
     const container = containerRef.current;
     if (!container) {
@@ -95,10 +99,11 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     const rect = container.getBoundingClientRect();
 
     // 计算可见范围（考虑缩放和偏移）
-    const minContentX = (-headerW - translate.x) / Math.max(scale, 1);
-    const maxContentX = (rect.width - headerW - translate.x) / Math.max(scale, 1);
-    const minContentY = (-headerH - translate.y) / Math.max(scale, 1);
-    const maxContentY = (rect.height - headerH - translate.y) / Math.max(scale, 1);
+    const safeScale = Math.max(scale, 0.01);
+    const minContentX = -translate.x / safeScale;
+    const maxContentX = (rect.width - translate.x) / safeScale;
+    const minContentY = -translate.y / safeScale;
+    const maxContentY = (rect.height - translate.y) / safeScale;
 
     // 转换为行列范围（添加一些边距以确保平滑滚动）
     const margin = 2; // 边距行/列数
@@ -151,19 +156,17 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     // clear
     ctx.clearRect(0, 0, rect.width, rect.height);
-    // reserve header space for axis labels
-    const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-    const headerH = Math.max(24, Math.floor(cellSize * 1.2));
-    // apply pan & zoom with header offset
+    // apply pan & zoom
     ctx.save();
-    ctx.translate(translate.x + headerW, translate.y + headerH);
+    ctx.translate(translate.x, translate.y);
     ctx.scale(scale, scale);
 
     // compute visible content bounds (in content coordinates) to draw grid in all directions
-    const minContentX = (-headerW - translate.x) / Math.max(scale, 1);
-    const maxContentX = (rect.width - headerW - translate.x) / Math.max(scale, 1);
-    const minContentY = (-headerH - translate.y) / Math.max(scale, 1);
-    const maxContentY = (rect.height - headerH - translate.y) / Math.max(scale, 1);
+    const safeScale = Math.max(scale, 0.01);
+    const minContentX = -translate.x / safeScale;
+    const maxContentX = (rect.width - translate.x) / safeScale;
+    const minContentY = -translate.y / safeScale;
+    const maxContentY = (rect.height - translate.y) / safeScale;
 
     // compute column/row range to cover visible area (allow negative start)
     const minCol = Math.floor(minContentX / cellSize);
@@ -301,12 +304,14 @@ const PixelGrid: React.FC<PixelGridProps> = ({
       for (const cellKey of Array.from(selectionState.selectedCells)) {
         const parts = cellKey.split(',');
         if (parts.length !== 2) continue;
-        const r = parseInt(parts[0], 10);
-        const c = parseInt(parts[1], 10);
-        if (Number.isNaN(r) || Number.isNaN(c)) continue;
-        // draw overlay regardless of whether pixel exists or has color
-        ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
-        ctx.strokeRect(c * cellSize, r * cellSize, cellSize, cellSize);
+        const vr = parseInt(parts[0], 10); // virtual row
+        const vc = parseInt(parts[1], 10); // virtual col
+        if (Number.isNaN(vr) || Number.isNaN(vc)) continue;
+        // 虚拟坐标转数组索引用于渲染（canvas 以数组索引为坐标绘制）
+        const ar = vr - gridOffset.row;
+        const ac = vc - gridOffset.col;
+        ctx.fillRect(ac * cellSize, ar * cellSize, cellSize, cellSize);
+        ctx.strokeRect(ac * cellSize, ar * cellSize, cellSize, cellSize);
       }
       ctx.restore();
     }
@@ -314,59 +319,6 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     // hover highlight removed: no per-cell hover overlay is drawn anymore
 
     ctx.restore();
-
-    // draw axis labels in header area (outside scaled/translated content)
-    // ensure labels sit above image and have white background for readability
-    ctx.fillStyle = 'rgba(55,65,81,0.95)';
-    const fontSize = Math.max(10, Math.floor(cellSize * 0.45));
-    ctx.font = `${fontSize}px sans-serif`;
-    ctx.textBaseline = 'middle';
-    // compute origin for labels
-    const originX = headerW + translate.x;
-    const originY = headerH + translate.y;
-    // top labels (column indices)
-    ctx.textAlign = 'center';
-    const labelDrawCols = Math.max(10, Math.floor((rect.width - headerW) / cellSize));
-    const labelCount = cols > 0 ? cols : labelDrawCols;
-    for (let c = 0; c < labelCount; c++) {
-      const text = String(c + 1);
-      const x = originX + (c * cellSize + cellSize / 2) * scale;
-      const y = headerH / 2;
-      // measure text and draw white background rect behind it
-      const metrics = ctx.measureText(text);
-      const textW = metrics.width;
-      const padX = 6;
-      const padY = 4;
-      const rectW = textW + padX * 2;
-      const rectH = fontSize + padY * 2;
-      const rectX = Math.round(x - rectW / 2);
-      const rectY = Math.round(y - rectH / 2);
-      ctx.fillStyle = 'white';
-      ctx.fillRect(rectX, rectY, rectW, rectH);
-      // draw text on top
-      ctx.fillStyle = 'rgba(55,65,81,0.95)';
-      ctx.fillText(text, x, y);
-    }
-    // left labels (row indices) starting from 1, align right inside header
-    ctx.textAlign = 'right';
-    for (let r = 0; r < (rows > 0 ? rows : Math.max(10, Math.floor((rect.height - headerH) / cellSize))); r++) {
-      const text = String(r + 1);
-      const y = originY + (r * cellSize + cellSize / 2) * scale;
-      // align the rect to the right inside header (small right padding)
-      const metrics = ctx.measureText(text);
-      const textW = metrics.width;
-      const padX = 6;
-      const padY = 4;
-      const rectW = textW + padX * 2;
-      const rectH = fontSize + padY * 2;
-      const rectRight = headerW - 6; // existing x for right alignment
-      const rectX = Math.round(rectRight - rectW);
-      const rectY = Math.round(y - rectH / 2);
-      ctx.fillStyle = 'white';
-      ctx.fillRect(rectX, rectY, rectW, rectH);
-      ctx.fillStyle = 'rgba(55,65,81,0.95)';
-      ctx.fillText(text, rectRight - padX, y);
-    }
 
     if (onPanZoomChange) onPanZoomChange(scale, translate.x, translate.y);
   }, [pixels, scale, translate, rows, cols, cellSize, highlightedProductId, onPanZoomChange, selectionState, currentTool]);
@@ -376,17 +328,26 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     const container = containerRef.current;
     if (!container) return;
     // only center when translate is near zero
-    const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-    const headerH = Math.max(24, Math.floor(cellSize * 1.2));
     if ((translate.x === 0 && translate.y === 0) && rows > 0 && cols > 0) {
       const rect = container.getBoundingClientRect();
       const contentW = cols * cellSize * scale;
       const contentH = rows * cellSize * scale;
-      const tx = Math.max(0, (rect.width - contentW) / 2 - headerW);
-      const ty = Math.max(0, (rect.height - contentH) / 2 - headerH);
+      const tx = Math.max(0, (rect.width - contentW) / 2);
+      const ty = Math.max(0, (rect.height - contentH) / 2);
       setTranslate({ x: tx, y: ty });
     }
   }, [pixels, rows, cols, cellSize, scale]);
+
+  // 将屏幕坐标转换为虚拟坐标
+  // 虚拟坐标 = 数组索引 + gridOffset，这样 handleBrushDraw/handleClick 中 row - gridOffset 就能得到正确的数组索引
+  const screenToVirtual = (clientX: number, clientY: number, container: HTMLDivElement): { row: number; col: number } => {
+    const rect = container.getBoundingClientRect();
+    const x = (clientX - rect.left - translate.x) / scale;
+    const y = (clientY - rect.top - translate.y) / scale;
+    const col = Math.floor(x / cellSize) + gridOffset.col;
+    const row = Math.floor(y / cellSize) + gridOffset.row;
+    return { row, col };
+  };
 
   // handle wheel zoom centered
   const handleWheel = (e: React.WheelEvent) => {
@@ -410,45 +371,62 @@ const PixelGrid: React.FC<PixelGridProps> = ({
     setTranslate({ x: newTx, y: newTy });
   };
 
-  // pointer pan handlers (hand tool and brush tool)
+  // Bresenham直线算法，用于画笔连续绘画
+  // 参数：r0/c0 和 r1/c1 是行列坐标
+  const getLineCells = (r0: number, c0: number, r1: number, c1: number): Array<{ row: number; col: number }> => {
+    const cells: Array<{ row: number; col: number }> = [];
+    const dr = Math.abs(r1 - r0);
+    const dc = Math.abs(c1 - c0);
+    const sr = r0 < r1 ? 1 : -1;
+    const sc = c0 < c1 ? 1 : -1;
+    let err = dr - dc;
+
+    let r = r0;
+    let c = c0;
+
+    while (true) {
+      cells.push({ row: r, col: c });
+      if (r === r1 && c === c1) break;
+      const e2 = 2 * err;
+      if (e2 > -dc) { err -= dc; r += sr; }
+      if (e2 < dr) { err += dr; c += sc; }
+    }
+    return cells;
+  };
+
+  // 计算画笔/橡皮擦覆盖的单元格
+  const getBrushCells = (centerRow: number, centerCol: number, size: number): Array<{ row: number; col: number }> => {
+    const cells: Array<{ row: number; col: number }> = [];
+    const half = Math.floor(size / 2);
+    for (let dr = -half; dr < size - half; dr++) {
+      for (let dc = -half; dc < size - half; dc++) {
+        cells.push({ row: centerRow + dr, col: centerCol + dc });
+      }
+    }
+    return cells;
+  };
+
+  // 判断当前是否为画笔或橡皮擦工具
+  const isBrushTool = currentTool === 'brush' || currentTool === 'eraser';
+
+  // pointer handlers
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
 
     if (currentTool === 'hand') {
       panRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, moved: false } as any;
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    } else if (currentTool === 'brush') {
-      // 画笔工具：开始绘画
+    } else if (isBrushTool) {
       const container = containerRef.current;
       if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-      const headerH = Math.max(24, Math.floor(cellSize * 1.2));
-      const x = (e.clientX - rect.left - (translate.x + headerW)) / scale;
-      const y = (e.clientY - rect.top - (translate.y + headerH)) / scale;
-      const col = Math.floor(x / cellSize);
-      const row = Math.floor(y / cellSize);
+      const { row, col } = screenToVirtual(e.clientX, e.clientY, container);
 
-      if (row >= 0 && row < rows && col >= 0 && col < cols) {
-        brushDrawingRef.current = { isDrawing: true, lastRow: row, lastCol: col };
-        // 计算画笔覆盖的单元格
-        const cellsToPaint: Array<{ row: number; col: number }> = [];
-        const size = brushSettings.size;
-        const halfSize = Math.floor(size / 2);
+      brushDrawingRef.current = { isDrawing: true, lastRow: row, lastCol: col };
 
-        for (let dr = -halfSize; dr < size - halfSize; dr++) {
-          for (let dc = -halfSize; dc < size - halfSize; dc++) {
-            const r = row + dr;
-            const c = col + dc;
-            if (r >= 0 && r < rows && c >= 0 && c < cols) {
-              cellsToPaint.push({ row: r, col: c });
-            }
-          }
-        }
-
-        if (cellsToPaint.length > 0) {
-          onBrushDraw?.(cellsToPaint);
-        }
+      const cells = getBrushCells(row, col, brushSettings.size);
+      if (cells.length > 0) {
+        if (currentTool === 'brush') onBrushDraw?.(cells);
+        else onBrushErase?.(cells);
       }
 
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
@@ -466,48 +444,35 @@ const PixelGrid: React.FC<PixelGridProps> = ({
       panRef.current.startY = e.clientY;
     }
 
-    // brush tool: painting
-    if (brushDrawingRef.current.isDrawing && currentTool === 'brush') {
+    // brush/eraser: continuous drawing
+    if (brushDrawingRef.current.isDrawing && isBrushTool) {
       const container = containerRef.current;
       if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-      const headerH = Math.max(24, Math.floor(cellSize * 1.2));
-      const x = (e.clientX - rect.left - (translate.x + headerW)) / scale;
-      const y = (e.clientY - rect.top - (translate.y + headerH)) / scale;
-      const col = Math.floor(x / cellSize);
-      const row = Math.floor(y / cellSize);
-
-      // 检查是否移动到新的单元格
+      const { row, col } = screenToVirtual(e.clientX, e.clientY, container);
       const { lastRow, lastCol } = brushDrawingRef.current;
+
       if (row !== lastRow || col !== lastCol) {
-        if (row >= 0 && row < rows && col >= 0 && col < cols) {
-          // 使用Bresenham直线算法插值，确保连续线条
-          const cellsToPaint = getLineCells(lastRow ?? row, lastCol ?? col, row, col);
-
-          // 扩展到画笔尺寸
-          const expandedCells: Array<{ row: number; col: number }> = [];
-          const size = brushSettings.size;
-          const halfSize = Math.floor(size / 2);
-
-          cellsToPaint.forEach(cell => {
-            for (let dr = -halfSize; dr < size - halfSize; dr++) {
-              for (let dc = -halfSize; dc < size - halfSize; dc++) {
-                const r = cell.row + dr;
-                const c = cell.col + dc;
-                if (r >= 0 && r < rows && c >= 0 && c < cols) {
-                  expandedCells.push({ row: r, col: c });
-                }
-              }
+        // Bresenham 插值确保连续线条
+        const lineCells = getLineCells(lastRow, lastCol, row, col);
+        // 扩展到画笔尺寸
+        const expandedCells: Array<{ row: number; col: number }> = [];
+        const size = brushSettings.size;
+        lineCells.forEach(cell => {
+          const half = Math.floor(size / 2);
+          for (let dr = -half; dr < size - half; dr++) {
+            for (let dc = -half; dc < size - half; dc++) {
+              expandedCells.push({ row: cell.row + dr, col: cell.col + dc });
             }
-          });
-
-          if (expandedCells.length > 0) {
-            onBrushDraw?.(expandedCells);
           }
+        });
 
-          brushDrawingRef.current = { isDrawing: true, lastRow: row, lastCol: col };
+        if (expandedCells.length > 0) {
+          if (currentTool === 'brush') onBrushDraw?.(expandedCells);
+          else onBrushErase?.(expandedCells);
         }
+
+        brushDrawingRef.current.lastRow = row;
+        brushDrawingRef.current.lastCol = col;
       }
     }
   };
@@ -515,57 +480,18 @@ const PixelGrid: React.FC<PixelGridProps> = ({
   const onPointerUp = (e: React.PointerEvent) => {
     if (currentTool === 'hand' && panRef.current) {
       panRef.current.dragging = false;
-    } else if (currentTool === 'brush' && brushDrawingRef.current.isDrawing) {
+    } else if (isBrushTool && brushDrawingRef.current.isDrawing) {
       brushDrawingRef.current.isDrawing = false;
-      brushDrawingRef.current.lastRow = null;
-      brushDrawingRef.current.lastCol = null;
-      // 通知画笔绘画完成，用于保存历史记录
       onBrushEnd?.();
     }
     try { (e.currentTarget as Element).releasePointerCapture?.(e.pointerId); } catch (err) { }
   };
 
-  // Bresenham直线算法，用于画笔连续绘画
-  const getLineCells = (x0: number, y0: number, x1: number, y1: number): Array<{ row: number; col: number }> => {
-    const cells: Array<{ row: number; col: number }> = [];
-    const dx = Math.abs(x1 - x0);
-    const dy = Math.abs(y1 - y0);
-    const sx = x0 < x1 ? 1 : -1;
-    const sy = y0 < y1 ? 1 : -1;
-    let err = dx - dy;
-
-    let x = x0;
-    let y = y0;
-
-    while (true) {
-      cells.push({ row: y, col: x });
-
-      if (x === x1 && y === y1) break;
-      const e2 = 2 * err;
-      if (e2 > -dy) {
-        err -= dy;
-        x += sx;
-      }
-      if (e2 < dx) {
-        err += dx;
-        y += sy;
-      }
-    }
-
-    return cells;
-  };
-
-  // handle clicks: compute cell and handle based on current tool
+  // handle clicks: compute virtual cell and handle based on current tool
   const handleClick = (e: React.MouseEvent) => {
     const container = containerRef.current;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const headerW = Math.max(36, Math.floor(cellSize * 1.6));
-    const headerH = Math.max(24, Math.floor(cellSize * 1.2));
-    const x = (e.clientX - rect.left - (translate.x + headerW)) / scale;
-    const y = (e.clientY - rect.top - (translate.y + headerH)) / scale;
-    const col = Math.floor(x / cellSize);
-    const row = Math.floor(y / cellSize);
+    const { row, col } = screenToVirtual(e.clientX, e.clientY, container);
 
     // if a pan occurred just before click, ignore as it's likely a drag
     if (panRef.current && (panRef.current as any).moved) {
@@ -573,23 +499,22 @@ const PixelGrid: React.FC<PixelGridProps> = ({
       return;
     }
 
-    // if outside grid bounds:
-    if (row < 0 || row >= rows || col < 0 || col >= cols) {
+    // if outside grid bounds (convert to array index for bounds check):
+    const arrRow = row - gridOffset.row;
+    const arrCol = col - gridOffset.col;
+    if (arrRow < 0 || arrRow >= rows || arrCol < 0 || arrCol >= cols) {
       if (currentTool === 'hand') {
         // hand tool: background click
         onBackgroundClick?.();
-        return;
       } else if (currentTool === 'free-select') {
         // allow selecting cells outside current pixels (e.g., expanded area)
         handleFreeSelect(row, col, e);
-        return;
-      } else if (currentTool === 'magic-wand') {
-        // magic wand requires an actual colored cell; out-of-bounds does nothing
-        return;
       }
+      // magic-wand, color-select, brush, paste: out-of-bounds does nothing
+      return;
     }
 
-    const cell = pixels[row][col];
+    const cell = pixels[arrRow][arrCol];
 
     // handle based on current tool
     if (currentTool === 'hand') {
@@ -606,11 +531,11 @@ const PixelGrid: React.FC<PixelGridProps> = ({
       // free select tool: handle selection
       handleFreeSelect(row, col, e);
     } else if (currentTool === 'magic-wand') {
-      // magic wand tool: flood fill selection
-      handleMagicWand(row, col);
+      // magic wand tool: flood fill selection (use array index)
+      handleMagicWand(arrRow, arrCol);
     } else if (currentTool === 'color-select') {
-      // color select tool: select all cells with same color
-      handleColorSelect(row, col);
+      // color select tool: select all cells with same color (use array index)
+      handleColorSelect(arrRow, arrCol);
     }
   };
 
@@ -736,7 +661,9 @@ const PixelGrid: React.FC<PixelGridProps> = ({
                   ? 'cell'
                   : currentTool === 'brush'
                     ? 'crosshair'
-                    : 'default'
+                    : currentTool === 'eraser'
+                      ? 'crosshair'
+                      : 'default'
         }}
       />
     </div>

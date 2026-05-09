@@ -2027,7 +2027,7 @@ const Drawings: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-sm">完工数量</label>
-                    <input type="number" min={1} value={completionQty} onChange={(e) => setCompletionQty(parseInt(e.target.value || '1'))} className="mt-1 w-full border rounded p-2" />
+                    <input type="number" min={1} value={completionQty || ''} onChange={(e) => setCompletionQty(parseInt(e.target.value) || 0)} className="mt-1 w-full border rounded p-2" />
                   </div>
                   <div>
                     <label className="block text-sm">完工时间（可选，默认当前时间）</label>

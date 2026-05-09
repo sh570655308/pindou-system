@@ -209,19 +209,24 @@ router.post('/', async (req, res) => {
       [userId, title, description || null, difficulty || 1, estimated_time || null, width || null, height || null, status || 'draft', shared ? 1 : 0]
     );
     const newId = result.id;
-    // 如果包含材料清单，则写入 drawing_materials
+    // 如果包含材料清单，则写入 drawing_materials（先去重并叠加数量）
     if (Array.isArray(materials) && materials.length > 0) {
+      const materialMap = new Map();
       for (let i = 0; i < materials.length; i++) {
         const m = materials[i];
         if (!m.product_id || !m.quantity) continue;
-        try {
-          await run(
-            `INSERT INTO drawing_materials (drawing_id, product_id, quantity, sort_order) VALUES (?, ?, ?, ?)`,
-            [newId, m.product_id, m.quantity, i]
-          );
-        } catch (e) {
-          // 忽略唯一约束等错误，继续插入剩余项
+        if (materialMap.has(m.product_id)) {
+          materialMap.get(m.product_id).quantity += (m.quantity || 0);
+        } else {
+          materialMap.set(m.product_id, { product_id: m.product_id, quantity: m.quantity || 0, sort_order: i });
         }
+      }
+      let sortIdx = 0;
+      for (const m of materialMap.values()) {
+        await run(
+          `INSERT INTO drawing_materials (drawing_id, product_id, quantity, sort_order) VALUES (?, ?, ?, ?)`,
+          [newId, m.product_id, m.quantity, sortIdx++]
+        );
       }
     }
     const newDrawing = await get(`SELECT * FROM drawings WHERE id = ?`, [newId]);
@@ -274,15 +279,20 @@ router.put('/:id', async (req, res) => {
         console.log(`[drawings] 开始更新材料清单，图纸ID: ${drawingId}, 材料数量: ${materials.length}`);
         console.log('[drawings] 接收到的材料数据:', JSON.stringify(materials, null, 2));
 
-        // 去重：按 product_id 去重，保留最后出现的（用户可能是手动修改了数量）
+        // 去重：按 product_id 去重，重复物料的数量叠加
         const uniqueMaterials = [];
-        const seenProductIds = new Set();
-        for (let i = materials.length - 1; i >= 0; i--) {
+        const materialMap = new Map();
+        for (let i = 0; i < materials.length; i++) {
           const m = materials[i];
           if (!m.product_id || !m.quantity) continue;
-          if (!seenProductIds.has(m.product_id)) {
-            seenProductIds.add(m.product_id);
-            uniqueMaterials.unshift(m);
+          if (materialMap.has(m.product_id)) {
+            // 叠加数量
+            const existing = materialMap.get(m.product_id);
+            existing.quantity = (existing.quantity || 0) + (m.quantity || 0);
+          } else {
+            const entry = { product_id: m.product_id, quantity: m.quantity || 0 };
+            materialMap.set(m.product_id, entry);
+            uniqueMaterials.push(entry);
           }
         }
 

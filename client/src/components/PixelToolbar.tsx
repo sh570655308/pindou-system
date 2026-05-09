@@ -6,7 +6,7 @@ export interface SelectionState {
   isSelecting: boolean;
 }
 
-export type SelectionTool = 'hand' | 'free-select' | 'magic-wand' | 'color-select' | 'paste' | 'brush';
+export type SelectionTool = 'hand' | 'free-select' | 'magic-wand' | 'color-select' | 'paste' | 'brush' | 'eraser';
 
 export interface BrushSettings {
   color: string | null;
@@ -81,7 +81,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
     const newX = e.clientX - dragRef.current.startX;
     const newY = e.clientY - dragRef.current.startY;
     // 限制在视窗范围内
-    const clampedX = Math.max(0, Math.min(window.innerWidth - (collapsed ? 48 : 500), newX));
+    const clampedX = Math.max(0, newX);
     const clampedY = Math.max(0, Math.min(window.innerHeight - 48, newY));
     onPositionChange({ x: clampedX, y: clampedY });
   };
@@ -156,8 +156,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
       style={{
         left: position.x,
         top: position.y,
-        minWidth: 400,
-        maxWidth: 900,
+        minWidth: 320,
       }}
     >
       {/* 折叠按钮 */}
@@ -172,19 +171,19 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
       </button>
 
       {/* 工具栏内容 */}
-      <div className="p-4">
+      <div className="p-2">
         <div className="flex">
           {/* 左侧：主工具区 */}
           <div className="flex-1">
             {/* 标题栏 */}
             <div
-              className="flex items-center justify-between mb-4 cursor-move select-none"
+              className="flex items-center justify-between mb-1 cursor-move select-none"
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
             >
-              <h3 className="text-lg font-semibold text-gray-800">像素工具</h3>
-              <div className="text-sm text-gray-500">
+              <h3 className="text-base font-semibold text-gray-800">像素工具</h3>
+              <div className="text-xs text-gray-500">
                 {selectionState.selectedCells.size > 0
                   ? `已选中 ${selectionState.selectedCells.size} 个像素`
                   : '未选中像素'
@@ -193,7 +192,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
             </div>
 
             {/* 主要工具 */}
-            <div className="flex items-center space-x-2 mb-4">
+            <div className="flex flex-wrap items-center gap-1">
               {/* 手掌工具 */}
               <button
                 className={`flex flex-col items-center justify-center w-16 h-16 rounded-lg border-2 transition-all duration-200 ${currentTool === 'hand'
@@ -272,6 +271,22 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
                 <span className="text-xs">粘贴</span>
               </button>
 
+              {/* 橡皮擦工具 */}
+              <button
+                className={`flex flex-col items-center justify-center w-16 h-16 rounded-lg border-2 transition-all duration-200 ${
+                  currentTool === 'eraser'
+                    ? 'border-red-500 bg-red-50 text-red-700'
+                    : 'border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800'
+                }`}
+                onClick={() => onToolChange('eraser')}
+                title="橡皮擦 - 拖拽连续擦除像素"
+              >
+                <svg className="w-6 h-6 mb-1" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span className="text-xs">橡皮擦</span>
+              </button>
+
               {/* 画笔工具组 */}
               {brushes.map((brush) => {
                 const hasColor = !!brush.color;
@@ -318,10 +333,10 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
 
           {/* 右侧：选中时扩展的编辑工具或画笔设置面板 */}
           {(selectionState.selectedCells.size > 0 || currentTool === 'brush') && (
-            <div className="ml-4 w-56 border-l border-gray-100 pl-4 flex-shrink-0">
+            <div className="ml-2 w-48 border-l border-gray-100 pl-2 flex-shrink-0">
               {currentTool === 'brush' ? (
                 // 画笔设置面板
-                <div className="space-y-3">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-gray-700">{getBrushDisplayName(activeBrush)}设置</span>
                   </div>
@@ -363,7 +378,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
               ) : (
                 // 选择编辑工具
                 <>
-                  <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium text-gray-700">编辑工具</span>
                     <button
                       className="text-xs text-gray-500 hover:text-gray-700"
@@ -373,7 +388,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
                     </button>
                   </div>
 
-                  <div className="flex flex-col items-stretch gap-3">
+                  <div className="flex flex-col items-stretch gap-2">
                     {/* 油漆桶：点击后由上层打开颜色/物料选择窗口（这里触发空色值信号） */}
                     <button
                       className="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg hover:bg-gray-50"

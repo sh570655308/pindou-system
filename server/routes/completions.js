@@ -218,6 +218,14 @@ router.post('/', upload.single('image'), async (req, res) => {
       [drawingId]
     );
     if (mats && mats.length > 0) {
+      // 保存物料快照（用于撤销时按原始物料清单回退）
+      for (const m of mats) {
+        await run(
+          `INSERT INTO completion_material_snapshots (completion_record_id, product_id, material_qty) VALUES (?, ?, ?)`,
+          [result.id, m.product_id, m.material_qty || 0]
+        );
+      }
+
       // 先创建消耗主记录（获取 recordId）
       const rec = await run(
         `INSERT INTO consumption_records (user_id, drawing_id, record_type, title, description, consumption_date)
@@ -388,11 +396,15 @@ router.put('/:id', upload.single('image'), async (req, res) => {
       const quantityDiff = newQuantity - existing.quantity; // 正数表示增加消耗，负数表示减少消耗
       const drawingId = existing.drawing_id;
 
-      // 获取图纸材料清单
-      const mats = await query(
-        `SELECT dm.product_id, dm.quantity as material_qty FROM drawing_materials dm WHERE dm.drawing_id = ?`,
-        [drawingId]
-      );
+      // 获取图纸材料清单（优先使用快照，保证按原始物料调整）
+      let mats = await query(`SELECT product_id, material_qty FROM completion_material_snapshots WHERE completion_record_id = ?`, [recId]);
+      // 兼容旧记录：如果没有快照数据，降级使用当前图纸物料
+      if (!mats || mats.length === 0) {
+        mats = await query(
+          `SELECT dm.product_id, dm.quantity as material_qty FROM drawing_materials dm WHERE dm.drawing_id = ?`,
+          [drawingId]
+        );
+      }
 
       if (mats && mats.length > 0) {
         // 创建调整消耗记录
@@ -472,7 +484,12 @@ router.post('/:id/undo', async (req, res) => {
     if (existingUndoLog) return res.status(400).json({ error: '该完工记录已撤销' });
 
     const drawing = await get(`SELECT * FROM drawings WHERE id = ?`, [rec.drawing_id]);
-    const mats = await query(`SELECT product_id, quantity as material_qty FROM drawing_materials WHERE drawing_id = ?`, [rec.drawing_id]);
+    // 从物料快照读取原始物料清单（而非当前图纸物料，确保按完工时的数据回退）
+    let mats = await query(`SELECT product_id, material_qty FROM completion_material_snapshots WHERE completion_record_id = ?`, [recId]);
+    // 兼容旧记录：如果没有快照数据，降级使用当前图纸物料
+    if (!mats || mats.length === 0) {
+      mats = await query(`SELECT product_id, quantity as material_qty FROM drawing_materials WHERE drawing_id = ?`, [rec.drawing_id]);
+    }
 
     // 创建撤销消耗主记录
     const cr = await run(
@@ -531,6 +548,26 @@ router.post('/:id/undo', async (req, res) => {
     const newCount = Math.max(0, (current ? current.cc : 0) - rec.quantity);
     await run(`UPDATE drawings SET completed_count = ? WHERE id = ?`, [newCount, rec.drawing_id]);
 
+    // 当图纸没有物料时，仍需写入一条撤销标记记录，否则防重复撤销和前端 is_revoked 标记都会失效
+    if (!mats || mats.length === 0) {
+      await run(
+        `INSERT INTO inventory_change_logs
+          (user_id, product_id, change_type, source, quantity_change, quantity_before, quantity_after, order_id, remark)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          userId,
+          0,
+          '完工撤销',
+          'manual',
+          0,
+          0,
+          0,
+          null,
+          `撤销完工记录 ${recId} - 图纸${rec.drawing_id}-${(drawing && drawing.title) || ''} 无物料撤销`
+        ]
+      );
+    }
+
     res.json({ message: '完工记录已撤销，库存变动已还原' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -567,7 +604,7 @@ router.delete('/:id', async (req, res) => {
       }
     }
 
-    // 删除完工记录
+    // 删除完工记录（关联的物料快照会被 CASCADE 自动删除）
     await run(`DELETE FROM completion_records WHERE id = ? AND user_id = ?`, [recId, userId]);
 
     res.json({ message: '完工记录已删除' });
