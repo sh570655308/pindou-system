@@ -35,6 +35,7 @@ interface PixelGridProps {
   // 新增的材料信息，用于显示材料代码
   materials?: MaterialInfo[];
   showMaterialCodes?: boolean;
+  darkBackground?: boolean;
   // 画笔相关
   brushSettings?: { color: string | null; productId: number | null; size: number };
   onBrushDraw?: (cells: Array<{ row: number; col: number }>) => void;
@@ -58,6 +59,7 @@ interface PixelGridProps {
   onCellSelect,
   materials = [],
   showMaterialCodes = false, // 默认为 false
+  darkBackground = false,
   brushSettings = { color: null, productId: null, size: 1 },
   onBrushDraw,
   onBrushErase,
@@ -155,7 +157,8 @@ interface PixelGridProps {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     // clear
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.fillStyle = darkBackground ? '#1a1a2e' : '#ffffff';
+    ctx.fillRect(0, 0, rect.width, rect.height);
     // apply pan & zoom
     ctx.save();
     ctx.translate(translate.x, translate.y);
@@ -187,7 +190,7 @@ interface PixelGridProps {
     const totalRows = drawEndRow - drawStartRow + 1;
 
     // background for the grid body (covering left/up/right/down visible area)
-    ctx.fillStyle = '#f9fafb';
+    ctx.fillStyle = darkBackground ? '#2a2a3e' : '#f9fafb';
     ctx.fillRect(drawStartCol * cellSize, drawStartRow * cellSize, totalCols * cellSize, totalRows * cellSize);
 
     // draw actual pixel cells (only where pixels exist). skip null cells (transparent/removed)
@@ -232,7 +235,7 @@ interface PixelGridProps {
 
     // thin grid lines across full background (including negative/left/up)
     ctx.lineWidth = 0.5 / Math.max(scale, 1);
-    ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+    ctx.strokeStyle = darkBackground ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
     for (let r = drawStartRow; r <= drawEndRow + 1; r++) {
       const y = r * cellSize;
       ctx.beginPath();
@@ -250,7 +253,7 @@ interface PixelGridProps {
 
     // darker/thicker grid lines every 10 (cover negative indices too)
     ctx.lineWidth = 1.5 / Math.max(scale, 1);
-    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.strokeStyle = darkBackground ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.28)';
     const majorRowStart = Math.floor(drawStartRow / 10) * 10;
     const majorColStart = Math.floor(drawStartCol / 10) * 10;
     for (let r = majorRowStart; r <= drawEndRow + 1; r += 10) {
@@ -321,7 +324,7 @@ interface PixelGridProps {
     ctx.restore();
 
     if (onPanZoomChange) onPanZoomChange(scale, translate.x, translate.y);
-  }, [pixels, scale, translate, rows, cols, cellSize, highlightedProductId, onPanZoomChange, selectionState, currentTool]);
+  }, [pixels, scale, translate, rows, cols, cellSize, highlightedProductId, onPanZoomChange, selectionState, currentTool, darkBackground, showMaterialCodes, materials]);
 
   // center content when pixels first set (only if translate is default)
   useEffect(() => {
@@ -638,7 +641,7 @@ interface PixelGridProps {
   };
 
   return (
-    <div ref={containerRef} className="relative w-full h-full bg-white touch-none" style={{ overflow: 'hidden' }}>
+    <div ref={containerRef} className="relative w-full h-full touch-none" style={{ overflow: 'hidden', backgroundColor: darkBackground ? '#1a1a2e' : '#ffffff' }}>
       <canvas
         ref={canvasRef}
         onWheel={handleWheel}

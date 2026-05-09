@@ -138,6 +138,7 @@ const PixelatePage: React.FC = () => {
   const [previewPos, setPreviewPos] = useLocalStorageState<{ left: number; top: number }>('pixelate-previewPos', { left: 24, top: Math.max(40, typeof window !== 'undefined' ? window.innerHeight - 200 : 200) });
   const [pastePreviewPos, setPastePreviewPos] = useLocalStorageState<{ left: number; top: number }>('pixelate-pastePreviewPos', { left: 24, top: 24 });
   const [showMaterialCodes, setShowMaterialCodes] = useLocalStorageState<boolean>('pixelate-showMaterialCodes', false);
+  const [darkBackground, setDarkBackground] = useLocalStorageState<boolean>('pixelate-darkBackground', false);
   // gridOffset: 虚拟坐标偏移量，pixels[0][0] 对应的虚拟坐标是 (gridOffset.row, gridOffset.col)
   const [gridOffset, setGridOffset] = useLocalStorageState<{ row: number; col: number }>('pixelate-gridOffset', { row: 0, col: 0 });
   const previewDrag = React.useRef<{ dragging: boolean; startX: number; startY: number } | null>(null);
@@ -1283,6 +1284,71 @@ const PixelatePage: React.FC = () => {
     exportForProject
   } = useBrushPresets();
 
+  // 快捷键：Q/W 切换画笔颜色，1-8 切换画笔，E 橡皮擦
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // Ctrl+Z 撤销，Ctrl+Y 重做
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        performUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        performRedo();
+        return;
+      }
+
+      // E: 切换橡皮擦
+      if (e.key === 'e' || e.key === 'E') {
+        setCurrentTool(currentTool === 'eraser' ? 'brush' : 'eraser');
+        return;
+      }
+
+      // I: 切换深色背景
+      if (e.key === 'i' || e.key === 'I') {
+        setDarkBackground(prev => !prev);
+        return;
+      }
+
+      // 1-8: 切换画笔1-8
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 8 && brushes.some(b => b.id === num)) {
+        setCurrentTool('brush');
+        setActiveBrushId(num);
+        return;
+      }
+
+      // Q/W: 仅在画笔工具时切换物料颜色
+      if (currentTool !== 'brush') return;
+      const isPrev = e.key === 'q' || e.key === 'Q';
+      const isNext = e.key === 'w' || e.key === 'W';
+      if (!isPrev && !isNext) return;
+
+      if (availableMaterials.length === 0) return;
+
+      const curIdx = availableMaterials.findIndex(m => m.id === activeBrush.productId);
+      let nextIdx: number;
+      if (curIdx === -1) {
+        nextIdx = isNext ? 0 : availableMaterials.length - 1;
+      } else {
+        nextIdx = isNext
+          ? (curIdx + 1) % availableMaterials.length
+          : (curIdx - 1 + availableMaterials.length) % availableMaterials.length;
+      }
+
+      const mat = availableMaterials[nextIdx];
+      if (mat) {
+        updateBrush(activeBrushId, { color: mat.color_hex || null, productId: mat.id });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentTool, activeBrush, activeBrushId, availableMaterials, updateBrush, brushes, setActiveBrushId, setCurrentTool, performUndo, performRedo, setDarkBackground]);
+
   const [showBrushColorPicker, setShowBrushColorPicker] = useState<boolean>(false);
   const [brushPreviewColor, setBrushPreviewColor] = useState<string | null>(null);
   const [brushPreviewProductId, setBrushPreviewProductId] = useState<number | null>(null);
@@ -2026,6 +2092,7 @@ const PixelatePage: React.FC = () => {
                     onSelectionChange={setSelectionState}
                     materials={availableMaterials}
                     showMaterialCodes={showMaterialCodes}
+                    darkBackground={darkBackground}
                     brushSettings={activeBrush}
                     onBrushDraw={handleBrushDraw}
                     onBrushErase={handleBrushErase}
@@ -2184,6 +2251,10 @@ const PixelatePage: React.FC = () => {
                 <label className="inline-flex items-center">
                   <input type="checkbox" checked={removeBg} onChange={(e) => setRemoveBg(e.target.checked)} className="mr-2" />
                   <span className="text-xs">抠图（移除背景）</span>
+                </label>
+                <label className="inline-flex items-center">
+                  <input type="checkbox" checked={darkBackground} onChange={(e) => setDarkBackground(e.target.checked)} className="mr-2" />
+                  <span className="text-xs">深色背景</span>
                 </label>
                 <label className="inline-flex items-center">
                   <input type="checkbox" checked={showMaterialCodes} onChange={(e) => setShowMaterialCodes(e.target.checked)} className="mr-2" />

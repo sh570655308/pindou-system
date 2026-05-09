@@ -17,6 +17,10 @@ const DEFAULT_BRUSHES: BrushPreset[] = [
   { id: 6, name: '画笔6', color: null, productId: null, size: 1 },
   { id: 7, name: '画笔7', color: null, productId: null, size: 1 },
   { id: 8, name: '画笔8', color: null, productId: null, size: 1 },
+  { id: 9, name: '画笔9', color: null, productId: null, size: 1 },
+  { id: 10, name: '画笔10', color: null, productId: null, size: 1 },
+  { id: 11, name: '画笔11', color: null, productId: null, size: 1 },
+  { id: 12, name: '画笔12', color: null, productId: null, size: 1 },
 ];
 
 const STORAGE_KEY = 'pixelate_brush_presets';
@@ -32,7 +36,14 @@ export function useBrushPresets() {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed.brushes && Array.isArray(parsed.brushes)) {
-          setBrushes(parsed.brushes);
+          // 补齐新增的默认画笔（localStorage 中缺少的用默认值填充）
+          const merged = [...parsed.brushes];
+          for (const def of DEFAULT_BRUSHES) {
+            if (!merged.some(b => b.id === def.id)) {
+              merged.push(def);
+            }
+          }
+          setBrushes(merged);
         }
         if (parsed.activeBrushId) {
           setActiveBrushId(parsed.activeBrushId);
