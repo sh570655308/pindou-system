@@ -511,7 +511,7 @@ interface PixelGridProps {
         onBackgroundClick?.();
       } else if (currentTool === 'free-select') {
         // allow selecting cells outside current pixels (e.g., expanded area)
-        handleFreeSelect(row, col, e);
+        handleFreeSelect(arrRow, arrCol, e);
       }
       // magic-wand, color-select, brush, paste: out-of-bounds does nothing
       return;
@@ -532,7 +532,7 @@ interface PixelGridProps {
       onCellClick?.(cell, row, col);
     } else if (currentTool === 'free-select') {
       // free select tool: handle selection
-      handleFreeSelect(row, col, e);
+      handleFreeSelect(arrRow, arrCol, e);
     } else if (currentTool === 'magic-wand') {
       // magic wand tool: flood fill selection (use array index)
       handleMagicWand(arrRow, arrCol);
@@ -615,7 +615,8 @@ interface PixelGridProps {
       const currentCell = pixels[r]?.[c];
       if (!currentCell || currentCell.hex !== targetColor) continue;
 
-      selected.add(key);
+      // 存虚拟坐标（数组索引 + gridOffset）
+      selected.add(`${r + gridOffset.row},${c + gridOffset.col}`);
 
       // add adjacent cells (4-way connectivity)
       const directions = [

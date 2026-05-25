@@ -89,10 +89,9 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
   // 在document级别监听鼠标移动和抬起事件，防止鼠标移出canvas时框选中断
   useEffect(() => {
     const handleDocumentMouseMove = (e: MouseEvent) => {
-      if (!isDrawing || !startPoint || !canvasRef.current || !imageRef.current) return;
+      if (!isDrawing || !startPoint || !imageRef.current) return;
 
-      const canvas = canvasRef.current;
-      const rect = canvas.getBoundingClientRect();
+      const rect = imageRef.current.getBoundingClientRect();
       const scaleX = imageRef.current.naturalWidth / rect.width;
       const scaleY = imageRef.current.naturalHeight / rect.height;
 
@@ -227,10 +226,9 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
 
   // 获取鼠标在图片上的相对坐标
   const getImageCoordinates = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || !imageRef.current) return null;
+    if (!imageRef.current) return null;
 
-    const rect = canvas.getBoundingClientRect();
+    const rect = imageRef.current.getBoundingClientRect();
     const scaleX = imageRef.current.naturalWidth / rect.width;
     const scaleY = imageRef.current.naturalHeight / rect.height;
 
@@ -533,7 +531,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
     <>
       {/* 主界面 */}
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
         {/* 头部 */}
         <div className="sticky top-0 bg-white border-b px-6 py-4">
           <div className="flex items-center justify-between">
@@ -550,44 +548,42 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
         </div>
 
         {/* 内容 */}
-        <div className="p-6">
+        <div className="p-6 overflow-y-auto">
           {showConfirm ? (
             // ===== 确认界面 =====
             <div>
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-4">
-                  <p className="text-sm text-gray-600">
-                    识别到 {recognizedMaterials.length} 个物料，请核对并修改后确认添加
-                  </p>
-                  <button
-                    onClick={handleOpenImageViewer}
-                    className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
-                  >
-                    查看原图
-                  </button>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm text-gray-600">
+                  识别到 {recognizedMaterials.length} 个物料，请核对并修改后确认添加
+                </p>
+                <button
+                  onClick={handleOpenImageViewer}
+                  className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
+                >
+                  查看原图
+                </button>
+              </div>
+
+              {/* 显示裁剪图片 */}
+              {cropImagePath && (
+                <div className="mb-3">
+                  <img
+                    src={`/uploads/drawings/${cropImagePath}`}
+                    alt="裁剪区域"
+                    className="max-w-full h-auto border rounded"
+                    style={{ maxHeight: '200px', objectFit: 'contain' }}
+                  />
                 </div>
+              )}
 
-                {/* 显示裁剪图片 */}
-                {cropImagePath && (
-                  <div className="mb-4 p-3 bg-gray-50 rounded">
-                    <p className="text-sm font-medium text-gray-700 mb-2">识别区域图片：</p>
-                    <img
-                      src={`/uploads/drawings/${cropImagePath}`}
-                      alt="裁剪区域"
-                      className="max-w-full h-auto border rounded"
-                      style={{ maxHeight: '300px' }}
-                    />
-                  </div>
-                )}
-
-                {/* 物料列表 */}
-                <div className="border rounded max-h-96 overflow-y-auto">
+              {/* 物料列表 */}
+              <div className="border rounded overflow-y-auto" style={{ maxHeight: 'calc(90vh - 380px)' }}>
                   <table className="w-full">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
-                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-700 border-b">物料代码</th>
-                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-700 border-b">数量</th>
-                        <th className="px-4 py-2 text-left text-sm font-medium text-gray-700 border-b" style={{ width: '80px' }}>操作</th>
+                        <th className="px-3 py-1.5 text-left text-sm font-medium text-gray-700 border-b">物料代码</th>
+                        <th className="px-3 py-1.5 text-left text-sm font-medium text-gray-700 border-b">数量</th>
+                        <th className="px-3 py-1.5 text-left text-sm font-medium text-gray-700 border-b" style={{ width: '80px' }}>操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -606,13 +602,13 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                           colSpan={3}
                           className="text-center"
                           style={{
-                            padding: hoverInsertIndex === -1 ? '10px' : '8px 0',
+                            padding: hoverInsertIndex === -1 ? '4px' : '2px 0',
                             opacity: hoverInsertIndex === -1 ? '1' : '1',
                             transition: 'all 0.2s ease'
                           }}
                         >
                           {hoverInsertIndex === -1 ? (
-                            <span className="inline-flex items-center justify-center w-8 h-8 bg-blue-500 text-white rounded-full text-lg font-bold hover:bg-blue-600">
+                            <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-500 text-white rounded-full text-sm font-bold hover:bg-blue-600">
                               +
                             </span>
                           ) : (
@@ -633,13 +629,13 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                           <React.Fragment key={material.id}>
                             {/* 当前行 */}
                             <tr className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <td className="px-4 py-2 border-b relative">
+                              <td className="px-3 py-1 border-b relative">
                                 <input
                                   type="text"
                                   value={displayText}
                                   onChange={(e) => handleProductSearchChange(material.id, e.target.value)}
                                   onFocus={() => setOpenPickerRow(material.id)}
-                                  className="w-full border rounded px-2 py-1"
+                                  className="w-full border rounded px-2 py-0.5 text-sm"
                                   placeholder="输入物料代码"
                                 />
                                 {openPickerRow === material.id && (
@@ -660,16 +656,16 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                                   </div>
                                 )}
                               </td>
-                              <td className="px-4 py-2 border-b">
+                              <td className="px-3 py-1 border-b">
                                 <input
                                   type="number"
                                   min="1"
                                   value={material.quantity}
                                   onChange={(e) => handleQuantityChange(material.id, parseInt(e.target.value) || 1)}
-                                  className="w-24 border rounded px-2 py-1"
+                                  className="w-24 border rounded px-2 py-0.5 text-sm"
                                 />
                               </td>
-                              <td className="px-4 py-2 border-b" style={{ width: '120px' }}>
+                              <td className="px-3 py-1 border-b" style={{ width: '120px' }}>
                                 <button
                                   onClick={() => handleShiftDownCode(idx)}
                                   className="text-blue-600 hover:text-blue-800 text-sm mr-2"
@@ -708,13 +704,13 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                               colSpan={3}
                               className="text-center"
                               style={{
-                                padding: hoverInsertIndex === idx ? '10px' : '8px 0',
+                                padding: hoverInsertIndex === idx ? '4px' : '2px 0',
                                 opacity: hoverInsertIndex === idx ? '1' : '1',
                                 transition: 'all 0.2s ease'
                               }}
                             >
                               {hoverInsertIndex === idx ? (
-                                <span className="inline-flex items-center justify-center w-8 h-8 bg-blue-500 text-white rounded-full text-lg font-bold hover:bg-blue-600">
+                                <span className="inline-flex items-center justify-center w-6 h-6 bg-blue-500 text-white rounded-full text-sm font-bold hover:bg-blue-600">
                                   +
                                 </span>
                               ) : (
@@ -728,10 +724,9 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                     </tbody>
                   </table>
                 </div>
-              </div>
 
               {/* 操作按钮 */}
-              <div className="flex items-center justify-between mt-6">
+              <div className="flex items-center justify-between mt-4">
                 <div className="text-sm text-gray-500">
                   共 {recognizedMaterials.length} 个物料
                 </div>
@@ -753,7 +748,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
             </div>
           ) : (
             // ===== 框选界面 =====
-            <>
+            <div className="flex flex-col flex-1 overflow-hidden min-h-0">
               {/* 图片选择 */}
               {images.length > 1 && (
                 <div className="mb-4">
@@ -778,13 +773,14 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
 
               {/* 图片显示区域 */}
               {selectedImage ? (
-                <div className="mb-4">
-                  <div className="relative inline-block w-full">
+                <div className="mb-2">
+                  <div className="relative inline-block border rounded bg-gray-50 overflow-hidden">
                     <img
                       ref={imageRef}
                       src={`/uploads/drawings/${selectedImage.path}`}
                       alt="图纸"
-                      className="w-full h-auto block"
+                      className="max-w-full h-auto block"
+                      style={{ maxHeight: 'calc(90vh - 240px)' }}
                     />
                     <canvas
                       ref={canvasRef}
@@ -792,23 +788,20 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                       className="absolute top-0 left-0 w-full h-full cursor-crosshair"
                       style={{ pointerEvents: 'auto' }}
                     />
+                    {/* 选择信息 */}
+                    {selection && (
+                      <div className="absolute bottom-2 left-2 z-20 p-2 bg-white/90 rounded shadow text-xs pointer-events-none">
+                        <div><strong>选择区域:</strong></div>
+                        <div>位置: X={Math.round(selection.x)}, Y={Math.round(selection.y)}</div>
+                        <div>大小: {Math.round(selection.width)} x {Math.round(selection.height)} 像素</div>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-sm text-gray-500 mt-2">在图纸上拖拽鼠标框选需要识别的区域</p>
+                  <p className="text-sm text-gray-500 mt-1">在图纸上拖拽鼠标框选需要识别的区域</p>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-500">
                   该图纸暂无图片
-                </div>
-              )}
-
-              {/* 选择信息 */}
-              {selection && (
-                <div className="mb-4 p-3 bg-blue-50 rounded">
-                  <div className="text-sm">
-                    <div><strong>选择区域:</strong></div>
-                    <div>位置: X={Math.round(selection.x)}, Y={Math.round(selection.y)}</div>
-                    <div>大小: {Math.round(selection.width)} x {Math.round(selection.height)} 像素</div>
-                  </div>
                 </div>
               )}
 
@@ -840,7 +833,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                   </button>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>

@@ -1186,6 +1186,56 @@ const PixelatePage: React.FC = () => {
     setShowBrushColorPicker(true);
   };
 
+  // 导出原始像素图（PNG透明通道，无压缩）
+  const exportPixelPng = () => {
+    const pxs = activeLayerPixels;
+    if (!pxs || pxs.length === 0) return;
+
+    // 找到有效像素的边界（自动裁剪空白区域）
+    let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+    for (let r = 0; r < pxs.length; r++) {
+      for (let c = 0; c < (pxs[r]?.length || 0); c++) {
+        if (pxs[r][c]?.hex) {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          if (c < minC) minC = c;
+          if (c > maxC) maxC = c;
+        }
+      }
+    }
+    if (minR === Infinity) return; // 没有有效像素
+
+    const cropRows = maxR - minR + 1;
+    const cropCols = maxC - minC + 1;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cropCols;
+    canvas.height = cropRows;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // 逐像素绘制，空像素保持透明
+    for (let r = 0; r < cropRows; r++) {
+      for (let c = 0; c < cropCols; c++) {
+        const cell = pxs[r + minR]?.[c + minC];
+        if (cell?.hex) {
+          ctx.fillStyle = cell.hex;
+          ctx.fillRect(c, r, 1, 1);
+        }
+      }
+    }
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pixel-art-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  };
+
   // 确认画笔颜色
   const handleConfirmBrushColor = (productId: number | null, color: string) => {
     updateBrush(activeBrushId, { color, productId });
@@ -2104,6 +2154,7 @@ const PixelatePage: React.FC = () => {
 
                       if (mode === 'color') {
                         // Select all cells with the same color/product as the clicked cell
+                        // r, c 是数组索引，选区 key 需要用虚拟坐标
                         const targetCell = pixels[r]?.[c];
                         if (targetCell) {
                           const targetHex = targetCell.hex;
@@ -2111,12 +2162,7 @@ const PixelatePage: React.FC = () => {
 
                           pixels.forEach((row, rowIndex) => {
                             row.forEach((cell, colIndex) => {
-                              // Match logic: 
-                              // If both have productId, must match. 
-                              // If no productId, match hex.
-                              // Empty (transparent) cells generally not selected unless specifically implemented
-
-                              if (cell.hex === null && cell.productId === null) return; // ignore background
+                              if (cell.hex === null && cell.productId === null) return;
 
                               let match = false;
                               if (targetPid !== undefined && targetPid !== null) {
@@ -2126,7 +2172,10 @@ const PixelatePage: React.FC = () => {
                               }
 
                               if (match) {
-                                newSet.add(`${rowIndex},${colIndex}`);
+                                // 数组索引转虚拟坐标
+                                const vr = rowIndex + gridOffset.row;
+                                const vc = colIndex + gridOffset.col;
+                                newSet.add(`${vr},${vc}`);
                               }
                             });
                           });
@@ -2287,6 +2336,13 @@ const PixelatePage: React.FC = () => {
                   title="还原"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6" /></svg>
+                </button>
+                <button
+                  className="w-8 h-8 flex items-center justify-center bg-emerald-600 text-white rounded text-[10px] font-bold"
+                  onClick={exportPixelPng}
+                  title="导出像素图（PNG透明）"
+                >
+                  PNG
                 </button>
                 <button
                   className="p-2 bg-indigo-600 text-white rounded"

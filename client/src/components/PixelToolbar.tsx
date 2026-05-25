@@ -333,7 +333,7 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
 
           {/* 右侧：选中时扩展的编辑工具或画笔设置面板 */}
           {(selectionState.selectedCells.size > 0 || currentTool === 'brush') && (
-            <div className="ml-2 w-48 border-l border-gray-100 pl-2 flex-shrink-0">
+            <div className="ml-2 border-l border-gray-100 pl-2 flex-shrink-0">
               {currentTool === 'brush' ? (
                 // 画笔设置面板
                 <div className="space-y-2">
@@ -376,56 +376,61 @@ const PixelToolbar: React.FC<PixelToolbarProps> = ({
                   </div>
                 </div>
               ) : (
-                // 选择编辑工具
-                <>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-700">编辑工具</span>
-                    <button
-                      className="text-xs text-gray-500 hover:text-gray-700"
-                      onClick={onClearSelection}
-                    >
-                      清除
-                    </button>
-                  </div>
+                // 选择编辑工具 - 2x2 网格紧凑排列
+                <div className="grid grid-cols-2 gap-1.5 p-0.5">
+                  {/* 取消选中 */}
+                  <button
+                    className={`flex flex-col items-center justify-center rounded-lg border-2 transition-all duration-200
+                      border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800`}
+                    style={{ width: 56, height: 44 }}
+                    onClick={onClearSelection}
+                    title="取消选中"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    <span className="text-[10px] mt-0.5">取消</span>
+                  </button>
 
-                  <div className="flex flex-col items-stretch gap-2">
-                    {/* 油漆桶：点击后由上层打开颜色/物料选择窗口（这里触发空色值信号） */}
-                    <button
-                      className="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg hover:bg-gray-50"
-                      onClick={() => onFillSelection('')}
-                      title="油漆桶 - 点击以选择颜色/物料"
-                    >
-                      <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                      </svg>
-                      <span className="text-sm text-gray-700">填充（选择颜色）</span>
-                    </button>
+                  {/* 油漆桶 */}
+                  <button
+                    className="flex flex-col items-center justify-center rounded-lg border-2 border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800 transition-all duration-200"
+                    style={{ width: 56, height: 44 }}
+                    onClick={() => onFillSelection('')}
+                    title="填充 - 选择颜色/物料"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    <span className="text-[10px] mt-0.5">填充</span>
+                  </button>
 
-                    {/* 复制按钮 */}
-                    <button
-                      className="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg hover:bg-gray-50"
-                      onClick={onCopySelection}
-                      title="复制 - 复制选中的像素"
-                    >
-                      <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-sm text-gray-700">复制</span>
-                    </button>
+                  {/* 复制 */}
+                  <button
+                    className="flex flex-col items-center justify-center rounded-lg border-2 border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800 transition-all duration-200"
+                    style={{ width: 56, height: 44 }}
+                    onClick={onCopySelection}
+                    title="复制选中的像素"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <span className="text-[10px] mt-0.5">复制</span>
+                  </button>
 
-                    {/* 垃圾桶 */}
-                    <button
-                      className="flex items-center gap-2 px-3 py-2 bg-white border rounded-lg hover:bg-gray-50"
-                      onClick={onDeleteSelection}
-                      title="删除 - 移除选中的像素"
-                    >
-                      <svg className="w-5 h-5 text-gray-700" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                        <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                      <span className="text-sm text-gray-700">删除</span>
-                    </button>
-                  </div>
-                </>
+                  {/* 删除 */}
+                  <button
+                    className="flex flex-col items-center justify-center rounded-lg border-2 border-red-300 hover:border-red-400 text-red-500 hover:text-red-700 transition-all duration-200"
+                    style={{ width: 56, height: 44 }}
+                    onClick={onDeleteSelection}
+                    title="删除选中的像素"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    <span className="text-[10px] mt-0.5">删除</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
