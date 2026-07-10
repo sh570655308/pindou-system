@@ -79,3 +79,13 @@ __pycache__/
 *.pyc
 .env/
 venv/
+# OCR ONNX 模型（大文件，用户自行下载）
+server/models/
+
+# 测试图纸目录
+识别用测试图纸/
+# 泄漏的 .env 副本（含真实密钥）
+ - 副本.env
+*.env副本
+# 旧版本发布包
+pindou-system-release.zip

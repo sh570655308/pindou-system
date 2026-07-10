@@ -8,6 +8,7 @@ import InventoryLogs from './pages/InventoryLogs';
 import Drawings from './pages/Drawings';
 import PendingDrawings from './pages/PendingDrawings';
 import PixelatePage from './pages/Pixelate';
+import GridOcrTest from './pages/GridOcrTest';
 import Admin from './pages/Admin';
 import Orders from './pages/Orders';
 import SalesOrders from './pages/SalesOrders';
@@ -123,6 +124,14 @@ const AppRoutes: React.FC = () => {
         element={
           <ProtectedRoute>
             <PixelatePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/grid-ocr"
+        element={
+          <ProtectedRoute>
+            <GridOcrTest />
           </ProtectedRoute>
         }
       />

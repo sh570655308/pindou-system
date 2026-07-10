@@ -8,8 +8,10 @@ import { useLocalStorageState } from '../utils/useLocalStorageState';
 import { useCompletionActions } from '../hooks/useCompletionActions';
 import PixelGrid, { PixelCell } from '../components/PixelGrid';
 import StatsPanel from '../components/StatsPanel';
-import DirectoryTree from '../components/DirectoryTree';
+import DirectoryTree, { DropPosition } from '../components/DirectoryTree';
 import MaterialRecognition from '../components/MaterialRecognition';
+import DrawingGridOcrModal from '../components/DrawingGridOcrModal';
+import PrintAlignmentModal from '../components/PrintAlignmentModal';
 import { FolderNode } from '../types/folder';
 
 interface Drawing {
@@ -70,6 +72,11 @@ const Drawings: React.FC = () => {
   } | null>(null);
   const [openPickerRow, setOpenPickerRow] = useState<string | null>(null);
   const [showMaterialRecognition, setShowMaterialRecognition] = useState<boolean>(false);
+  const [showDrawingGridOcr, setShowDrawingGridOcr] = useState<boolean>(false);
+
+  // 打印对齐图纸：弹窗显示状态 + 当前要处理的图纸图片 URL
+  const [showPrintAlignment, setShowPrintAlignment] = useState<boolean>(false);
+  const [printAlignmentImage, setPrintAlignmentImage] = useState<string>('');
 
   // 使用共享的完工记录操作hook
   const { loading: actionLoading, handleUndo, handleDelete } = useCompletionActions({
@@ -358,11 +365,61 @@ const Drawings: React.FC = () => {
     }
   };
 
-  const handleFolderDrop = async (draggedId: number, targetId: number) => {
+  // 在目录树中查找某个目录节点
+  const findFolderNode = (nodes: FolderNode[], id: number): FolderNode | null => {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      if (node.children) {
+        const found = findFolderNode(node.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  // 判断 candidateId 是否是 draggedId 的子孙（禁止拖入自己的子树）
+  const isDescendant = (nodes: FolderNode[], draggedId: number, candidateId: number): boolean => {
+    const dragged = findFolderNode(nodes, draggedId);
+    if (!dragged) return false;
+    const checkChildren = (n: FolderNode): boolean => {
+      return (n.children || []).some((c) => c.id === candidateId || checkChildren(c));
+    };
+    return checkChildren(dragged);
+  };
+
+  const handleFolderReorder = async (draggedId: number, targetId: number, position: DropPosition) => {
+    if (draggedId === targetId) return;
+    // 不允许拖到自己的子孙节点上
+    if (isDescendant(folders, draggedId, targetId)) {
+      alert('不能将目录移动到其子目录下');
+      return;
+    }
+    const target = findFolderNode(folders, targetId);
+    if (!target) return;
+
+    let parentId: number | null;
+    let beforeId: number | null = null;
+    let afterId: number | null = null;
+
+    if (position === 'inside') {
+      // 成为 target 的子目录（追加到末尾）
+      parentId = target.id;
+    } else if (position === 'before') {
+      // 插到 target 之前的同级位置
+      parentId = target.parent_id;
+      beforeId = target.id;
+    } else {
+      // after：插到 target 之后的同级位置
+      parentId = target.parent_id;
+      afterId = target.id;
+    }
+
     try {
-      // 查找被拖拽的图纸ID（这里简化处理，实际可能需要更复杂的逻辑）
-      // 目前仅支持目录之间的移动
-      await api.put(`/drawings/folders/${draggedId}`, { parent_id: targetId });
+      await api.put(`/drawings/folders/${draggedId}/reorder`, {
+        parent_id: parentId,
+        before_id: beforeId,
+        after_id: afterId,
+      });
       await loadFolders();
     } catch (err: any) {
       console.error('移动目录失败', err);
@@ -879,6 +936,29 @@ const Drawings: React.FC = () => {
 
     setMaterials([...materials, ...newMaterials]);
     alert(`已识别并添加 ${detectedMaterials.length} 个物料`);
+  };
+
+  // 图纸网格识别：用识别结果【替换】当前材料清单
+  const handleGridOcrConfirm = (detected: Array<{ product_id: number; quantity: number; code: string; unmatched?: boolean }>) => {
+    const ts = Date.now();
+    const newMaterials: MaterialLine[] = detected.map((m, idx) => ({
+      product_id: m.product_id,
+      quantity: m.quantity,
+      id: `grid-${ts}-${idx}`,
+      inventory_qty: undefined,
+      in_transit_qty: undefined,
+    }));
+    // 同步 productSearch 显示文本，让 BOM 输入框显示正确的代码
+    const newSearch: Record<string, string> = {};
+    newMaterials.forEach((m) => {
+      const prod = products.find((p) => p.id === m.product_id);
+      if (prod && m.id) {
+        newSearch[m.id] = `${prod.code}${prod.category_name ? ' (' + prod.category_name + ')' : ''}`;
+      }
+    });
+    setMaterials(newMaterials);
+    setProductSearch(newSearch);
+    alert(`已替换材料清单，共导入 ${detected.length} 种物料`);
   };
 
   const handleUploadImages = async () => {
@@ -1410,7 +1490,7 @@ const Drawings: React.FC = () => {
               onFolderCreate={handleCreateFolder}
               onFolderEdit={handleEditFolder}
               onFolderDelete={handleDeleteFolder}
-              onFolderDrop={handleFolderDrop}
+              onFolderReorder={handleFolderReorder}
               loading={loadingFolders}
             />
           </div>
@@ -1766,6 +1846,30 @@ const Drawings: React.FC = () => {
                         className="bg-green-500 hover:bg-green-600 text-white py-2 px-3 rounded text-sm disabled:bg-gray-300 disabled:cursor-not-allowed"
                       >
                         物料识别
+                      </button>
+                      <button
+                        onClick={() => setShowDrawingGridOcr(true)}
+                        disabled={!selectedDrawing}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white py-2 px-3 rounded text-sm disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        title="框选图纸网格，逐格 OCR 识别物料代码并替换材料清单"
+                      >
+                        图纸识别
+                      </button>
+                      <button
+                        onClick={() => {
+                          const bp = images.find((im) => im.image_type === 'blueprint');
+                          if (!bp) {
+                            alert('请先上传图纸图片');
+                            return;
+                          }
+                          setPrintAlignmentImage(`${window.location.origin}/uploads/drawings/${bp.file_path}`);
+                          setShowPrintAlignment(true);
+                        }}
+                        disabled={!selectedDrawing}
+                        className="bg-purple-500 hover:bg-purple-600 text-white py-2 px-3 rounded text-sm disabled:bg-gray-300 disabled:cursor-not-allowed"
+                        title="生成用于与透明拼豆板对齐的打印图纸"
+                      >
+                        打印对齐图
                       </button>
                     </div>
                   </div>
@@ -2530,6 +2634,28 @@ const Drawings: React.FC = () => {
             products={products}
             onMaterialDetected={handleMaterialDetected}
             onClose={() => setShowMaterialRecognition(false)}
+          />
+        )}
+
+        {/* 图纸网格识别弹窗 */}
+        {showDrawingGridOcr && selectedDrawing && (
+          <DrawingGridOcrModal
+            images={images}
+            products={products}
+            onConfirm={handleGridOcrConfirm}
+            onClose={() => setShowDrawingGridOcr(false)}
+          />
+        )}
+
+        {/* 打印对齐图纸生成组件 */}
+        {showPrintAlignment && printAlignmentImage && (
+          <PrintAlignmentModal
+            imageUrl={printAlignmentImage}
+            drawingTitle={selectedDrawing?.title}
+            onClose={() => {
+              setShowPrintAlignment(false);
+              setPrintAlignmentImage('');
+            }}
           />
         )}
       </div>

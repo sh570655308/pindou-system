@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, MoreVertical, Plus, Edit, Trash2 } from 'lucide-react';
 import { FolderNode } from '../types/folder';
 
+export type DropPosition = 'before' | 'inside' | 'after';
+
 interface DirectoryTreeProps {
   tree: FolderNode[];
   selectedFolderId: number | null;
@@ -9,6 +11,13 @@ interface DirectoryTreeProps {
   onFolderCreate: (parentId: number | null) => void;
   onFolderEdit: (folderId: number) => void;
   onFolderDelete: (folderId: number) => void;
+  /**
+   * 拖放移动目录：把 draggedId 放到 targetId 的 position 位置。
+   * - before/after：插入到 targetId 的同级前/后
+   * - inside：成为 targetId 的子目录
+   */
+  onFolderReorder?: (draggedId: number, targetId: number, position: DropPosition) => void;
+  /** @deprecated 旧回调，仅保留向后兼容；若提供 onFolderReorder 则忽略此回调 */
   onFolderDrop?: (draggedId: number, targetId: number) => void;
   loading?: boolean;
 }
@@ -24,7 +33,10 @@ const FolderTreeNode: React.FC<{
   onFolderCreate: (parentId: number | null) => void;
   onFolderEdit: (folderId: number) => void;
   onFolderDelete: (folderId: number) => void;
+  onFolderReorder?: (draggedId: number, targetId: number, position: DropPosition) => void;
   onFolderDrop?: (draggedId: number, targetId: number) => void;
+  /** 判断 targetId 是否是 draggedId 的子孙（用于禁用无效拖放） */
+  isDescendantOfDragged?: (draggedId: number, targetId: number) => boolean;
 }> = ({
   node,
   level,
@@ -33,11 +45,16 @@ const FolderTreeNode: React.FC<{
   onFolderCreate,
   onFolderEdit,
   onFolderDelete,
-  onFolderDrop
+  onFolderReorder,
+  onFolderDrop,
+  isDescendantOfDragged
 }) => {
   const [expanded, setExpanded] = useState(node.expanded || false);
   const [showMenu, setShowMenu] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [dropPosition, setDropPosition] = useState<DropPosition | null>(null);
+  // dragenter/dragleave 计数器，避免子元素切换造成抖动
+  const dragEnterCount = useRef(0);
   const hasChildren = node.children && node.children.length > 0;
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -91,17 +108,64 @@ const FolderTreeNode: React.FC<{
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    setDropPosition(null);
+    dragEnterCount.current = 0;
+  };
+
+  // 根据鼠标在节点内的纵向位置判定拖放位置
+  const computeDropPosition = (e: React.DragEvent): DropPosition => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const h = rect.height;
+    if (y < h * 0.25) return 'before';
+    if (y > h * 0.75) return 'after';
+    return 'inside';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (!onFolderReorder) return;
+    const draggedId = parseInt(e.dataTransfer.getData('text/plain') || '0');
+    // 不能拖到自己身上
+    if (draggedId && draggedId === node.id) return;
+    // 不能拖到自己的子孙节点上（仅在 isDescendantOfDragged 提供时检查）
+    if (draggedId && isDescendantOfDragged && isDescendantOfDragged(draggedId, node.id)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    const pos = computeDropPosition(e);
+    if (pos !== dropPosition) setDropPosition(pos);
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!onFolderReorder) return;
+    const draggedId = parseInt(e.dataTransfer.getData('text/plain') || '0');
+    if (draggedId && draggedId === node.id) return;
+    if (draggedId && isDescendantOfDragged && isDescendantOfDragged(draggedId, node.id)) return;
+    dragEnterCount.current += 1;
+  };
+
+  const handleDragLeave = () => {
+    if (!onFolderReorder) return;
+    dragEnterCount.current -= 1;
+    if (dragEnterCount.current <= 0) {
+      dragEnterCount.current = 0;
+      setDropPosition(null);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const draggedId = parseInt(e.dataTransfer.getData('text/plain'));
-    if (draggedId !== node.id && onFolderDrop) {
+    dragEnterCount.current = 0;
+    const pos = dropPosition;
+    setDropPosition(null);
+    if (!draggedId || draggedId === node.id) return;
+    // 后代判定（虽然 dragOver 已拦截，这里再保险一次）
+    if (isDescendantOfDragged && isDescendantOfDragged(draggedId, node.id)) return;
+    if (onFolderReorder) {
+      onFolderReorder(draggedId, node.id, pos || 'inside');
+    } else if (onFolderDrop) {
+      // 向后兼容：没有 reorder 回调时退化为"成为子目录"
       onFolderDrop(draggedId, node.id);
     }
   };
@@ -109,19 +173,42 @@ const FolderTreeNode: React.FC<{
   const isSelected = selectedFolderId === node.id;
   const paddingLeft = level * 16 + 8;
 
+  // 视觉反馈类
+  const isDropInside = dropPosition === 'inside';
+  const showDropLineBefore = dropPosition === 'before';
+  const showDropLineAfter = dropPosition === 'after';
+
   return (
     <div className="folder-tree-node">
       <div
         className={`folder-node-content group flex items-center py-1.5 px-2 cursor-pointer hover:bg-gray-100 rounded-md transition-colors relative ${
           isSelected ? 'bg-blue-100 text-blue-700' : ''
-        } ${isDragging ? 'opacity-50' : ''}`}
+        } ${isDragging ? 'opacity-50' : ''} ${
+          isDropInside ? 'ring-2 ring-blue-400 bg-blue-50' : ''
+        }`}
         style={{ paddingLeft: `${paddingLeft}px` }}
-        draggable={!!onFolderDrop}
+        draggable={!!(onFolderReorder || onFolderDrop)}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* 拖放插入指示线：before（上方） */}
+        {showDropLineBefore && (
+          <div
+            className="absolute left-2 right-2 top-0 z-10 pointer-events-none"
+            style={{ height: '2px', backgroundColor: '#3B82F6', boxShadow: '0 0 3px rgba(59,130,246,0.8)' }}
+          />
+        )}
+        {/* 拖放插入指示线：after（下方） */}
+        {showDropLineAfter && (
+          <div
+            className="absolute left-2 right-2 bottom-0 z-10 pointer-events-none"
+            style={{ height: '2px', backgroundColor: '#3B82F6', boxShadow: '0 0 3px rgba(59,130,246,0.8)' }}
+          />
+        )}
         {/* 展开/折叠按钮 */}
         <button
           onClick={toggleExpand}
@@ -208,7 +295,9 @@ const FolderTreeNode: React.FC<{
               onFolderCreate={onFolderCreate}
               onFolderEdit={onFolderEdit}
               onFolderDelete={onFolderDelete}
+              onFolderReorder={onFolderReorder}
               onFolderDrop={onFolderDrop}
+              isDescendantOfDragged={isDescendantOfDragged}
             />
           ))}
         </div>
@@ -227,9 +316,36 @@ const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   onFolderCreate,
   onFolderEdit,
   onFolderDelete,
+  onFolderReorder,
   onFolderDrop,
   loading = false
 }) => {
+  // 构建 id -> 子孙 id 集合的索引，用于禁止把目录拖入自己的子树
+  const descendantIndex = React.useMemo(() => {
+    const index = new Map<number, Set<number>>();
+    const collect = (n: FolderNode): Set<number> => {
+      const acc = new Set<number>();
+      (n.children || []).forEach((c) => {
+        const childSet = collect(c);
+        // 把子节点及其所有子孙并入本节点的后代集合
+        childSet.forEach((id) => acc.add(id));
+        acc.add(c.id);
+      });
+      index.set(n.id, acc);
+      return acc;
+    };
+    tree.forEach((n) => collect(n));
+    return index;
+  }, [tree]);
+
+  const isDescendantOfDragged = React.useCallback(
+    (draggedId: number, targetId: number): boolean => {
+      const set = descendantIndex.get(draggedId);
+      return !!set && set.has(targetId);
+    },
+    [descendantIndex]
+  );
+
   return (
     <div className="directory-tree">
       {/* 全部图纸选项 */}
@@ -285,7 +401,9 @@ const DirectoryTree: React.FC<DirectoryTreeProps> = ({
               onFolderCreate={onFolderCreate}
               onFolderEdit={onFolderEdit}
               onFolderDelete={onFolderDelete}
+              onFolderReorder={onFolderReorder}
               onFolderDrop={onFolderDrop}
+              isDescendantOfDragged={isDescendantOfDragged}
             />
           ))}
         </div>

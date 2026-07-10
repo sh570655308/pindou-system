@@ -72,7 +72,7 @@ interface PixelGridProps {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState<number>(1);
   const [translate, setTranslate] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const panRef = useRef<{ dragging: boolean; startX: number; startY: number; moved?: boolean } | null>(null);
+  const panRef = useRef<{ dragging: boolean; startX: number; startY: number; moved?: boolean; viaSpace?: boolean } | null>(null);
   const selectStartRef = useRef<{ row: number; col: number } | null>(null);
   // === 画笔/橡皮擦 共用状态 ===
   const brushDrawingRef = useRef<{ isDrawing: boolean; lastRow: number; lastCol: number }>({
@@ -80,6 +80,55 @@ interface PixelGridProps {
     lastRow: 0,
     lastCol: 0
   });
+
+  // === Photoshop 风格：按住空格拖拽画布 ===
+  // spaceHeldRef 用于事件处理（避免闭包陈旧值），spaceHeld 用于驱动光标重渲染
+  const spaceHeldRef = useRef(false);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null): boolean => {
+      const node = el as HTMLElement | null;
+      if (!node) return false;
+      const tag = node.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable === true;
+    };
+    const isSpaceKey = (e: KeyboardEvent) =>
+      e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!isSpaceKey(e)) return;
+      // 在输入框/文本域中时，空格正常输入（不拦截）
+      if (isEditable(e.target)) return;
+      if (!spaceHeldRef.current) {
+        spaceHeldRef.current = true;
+        setSpaceHeld(true);
+      }
+      // 阻止默认行为：页面滚动 + 按钮被空格激活
+      e.preventDefault();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!isSpaceKey(e)) return;
+      if (isEditable(e.target)) return;
+      if (spaceHeldRef.current) {
+        spaceHeldRef.current = false;
+        setSpaceHeld(false);
+      }
+    };
+    // 窗口失焦时释放，避免卡住“按住空格”状态
+    const onBlur = () => {
+      if (spaceHeldRef.current) {
+        spaceHeldRef.current = false;
+        setSpaceHeld(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
 
   const rows = pixels.length;
   const cols = pixels[0]?.length || 0;
@@ -412,12 +461,20 @@ interface PixelGridProps {
   // 判断当前是否为画笔或橡皮擦工具
   const isBrushTool = currentTool === 'brush' || currentTool === 'eraser';
 
+  // 按住空格时，任意工具都切换为平移（Photoshop 风格）
   // pointer handlers
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
 
+    // 空格拖拽优先级最高，任何工具下都进入平移
+    if (spaceHeldRef.current) {
+      panRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, moved: false, viaSpace: true } as any;
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      return;
+    }
+
     if (currentTool === 'hand') {
-      panRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, moved: false } as any;
+      panRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, moved: false, viaSpace: false } as any;
       (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
     } else if (isBrushTool) {
       const container = containerRef.current;
@@ -437,14 +494,17 @@ interface PixelGridProps {
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
-    // hand tool: panning
-    if (panRef.current && panRef.current.dragging && currentTool === 'hand') {
-      const dx = e.clientX - panRef.current.startX;
-      const dy = e.clientY - panRef.current.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panRef.current.moved = true;
+    // panning: hand 工具 或 空格拖拽（viaSpace）
+    const pan = panRef.current;
+    const isPanning = !!(pan && pan.dragging &&
+      (currentTool === 'hand' || (pan as any).viaSpace));
+    if (isPanning && pan) {
+      const dx = e.clientX - pan.startX;
+      const dy = e.clientY - pan.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) pan.moved = true;
       setTranslate((t) => ({ x: t.x + dx, y: t.y + dy }));
-      panRef.current.startX = e.clientX;
-      panRef.current.startY = e.clientY;
+      pan.startX = e.clientX;
+      pan.startY = e.clientY;
     }
 
     // brush/eraser: continuous drawing
@@ -481,7 +541,11 @@ interface PixelGridProps {
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
-    if (currentTool === 'hand' && panRef.current) {
+    // 空格拖拽结束：清除 panRef（无需依赖 currentTool）
+    if (panRef.current && (panRef.current as any).viaSpace) {
+      panRef.current.dragging = false;
+      panRef.current = null;
+    } else if (currentTool === 'hand' && panRef.current) {
       panRef.current.dragging = false;
     } else if (isBrushTool && brushDrawingRef.current.isDrawing) {
       brushDrawingRef.current.isDrawing = false;
@@ -494,6 +558,10 @@ interface PixelGridProps {
   const handleClick = (e: React.MouseEvent) => {
     const container = containerRef.current;
     if (!container) return;
+
+    // 空格仍按住时，点击不触发任何单元格操作（仅在拖拽画布）
+    if (spaceHeldRef.current) return;
+
     const { row, col } = screenToVirtual(e.clientX, e.clientY, container);
 
     // if a pan occurred just before click, ignore as it's likely a drag
@@ -655,19 +723,21 @@ interface PixelGridProps {
           width: '100%',
           height: '100%',
           display: 'block',
-          cursor: currentTool === 'hand'
+          cursor: spaceHeld
             ? (panRef.current?.dragging ? 'grabbing' : 'grab')
-            : currentTool === 'free-select'
-              ? 'crosshair'
-              : currentTool === 'magic-wand'
-                ? 'copy'
-                : currentTool === 'paste'
-                  ? 'cell'
-                  : currentTool === 'brush'
-                    ? 'crosshair'
-                    : currentTool === 'eraser'
+            : currentTool === 'hand'
+              ? (panRef.current?.dragging ? 'grabbing' : 'grab')
+              : currentTool === 'free-select'
+                ? 'crosshair'
+                : currentTool === 'magic-wand'
+                  ? 'copy'
+                  : currentTool === 'paste'
+                    ? 'cell'
+                    : currentTool === 'brush'
                       ? 'crosshair'
-                      : 'default'
+                      : currentTool === 'eraser'
+                        ? 'crosshair'
+                        : 'default'
         }}
       />
     </div>

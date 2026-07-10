@@ -11,6 +11,7 @@ const usersRoutes = require('./routes/users');
 const pixelateRoutes = require('./routes/pixelate');
 const completionsRoutes = require('./routes/completions');
 const reportsRoutes = require('./routes/reports');
+const ocrRoutes = require('./routes/ocr');
 const { initializeDatabase, uploadsDir } = require('./database');
 
 const app = express();
@@ -43,6 +44,7 @@ app.use('/api/pixelate', pixelateRoutes);
 app.use('/api/completions', completionsRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/sales_orders', require('./routes/sales_orders'));
+app.use('/api/ocr', ocrRoutes);
 
 
 // 服务前端构建后的静态文件（生产环境）

@@ -45,6 +45,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
 
   // 图片查看器状态
   const [showImageViewer, setShowImageViewer] = useState<boolean>(false);
+  const [viewerImagePath, setViewerImagePath] = useState<string>('');
   const [imageScale, setImageScale] = useState<number>(1);
   const [imagePosition, setImagePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -475,7 +476,8 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
   };
 
   // 图片查看器：打开
-  const handleOpenImageViewer = () => {
+  const handleOpenImageViewer = (imagePath?: string) => {
+    setViewerImagePath(imagePath || (selectedImage ? selectedImage.path : ''));
     setShowImageViewer(true);
     setImageScale(1);
     setImagePosition({ x: 0, y: 0 });
@@ -557,7 +559,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                   识别到 {recognizedMaterials.length} 个物料，请核对并修改后确认添加
                 </p>
                 <button
-                  onClick={handleOpenImageViewer}
+                  onClick={() => handleOpenImageViewer()}
                   className="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700"
                 >
                   查看原图
@@ -570,8 +572,10 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
                   <img
                     src={`/uploads/drawings/${cropImagePath}`}
                     alt="裁剪区域"
-                    className="max-w-full h-auto border rounded"
+                    className="max-w-full h-auto border rounded cursor-pointer hover:opacity-80 transition-opacity"
                     style={{ maxHeight: '200px', objectFit: 'contain' }}
+                    onClick={() => handleOpenImageViewer(cropImagePath)}
+                    title="点击查看大图"
                   />
                 </div>
               )}
@@ -579,7 +583,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
               {/* 物料列表 */}
               <div className="border rounded overflow-y-auto" style={{ maxHeight: 'calc(90vh - 380px)' }}>
                   <table className="w-full">
-                    <thead className="bg-gray-50 sticky top-0">
+                    <thead className="bg-gray-50 sticky top-0 z-10">
                       <tr>
                         <th className="px-3 py-1.5 text-left text-sm font-medium text-gray-700 border-b">物料代码</th>
                         <th className="px-3 py-1.5 text-left text-sm font-medium text-gray-700 border-b">数量</th>
@@ -840,7 +844,7 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
     </div>
 
     {/* 图片查看器弹窗 */}
-    {showImageViewer && selectedImage && (
+    {showImageViewer && viewerImagePath && (
       <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-[100]">
         <div className="relative w-full h-full flex items-center justify-center">
           {/* 关闭按钮 */}
@@ -872,8 +876,8 @@ const MaterialRecognition: React.FC<MaterialRecognitionProps> = ({
             onMouseLeave={handleImageMouseUp}
           >
             <img
-              src={`/uploads/drawings/${selectedImage.path}`}
-              alt="原图"
+              src={`/uploads/drawings/${viewerImagePath}`}
+              alt="查看图片"
               className="max-w-none"
               style={{
                 transform: `translate(${imagePosition.x}px, ${imagePosition.y}px) scale(${imageScale})`,

@@ -115,25 +115,50 @@ if (Test-Path (Join-Path $Root "server")) {
 
 # If client/build exists, use prebuilt mode
 if (Test-Path (Join-Path $Root "client\build")) {
-  Write-Host "Found client/build — using prebuilt mode."
+  Write-Host "Found client/build — using prebuilt mode ($Dockerfile)."
   New-Item -Path (Join-Path $Tmp "client") -ItemType Directory -Force | Out-Null
   Copy-Item -Path (Join-Path $Root "client\build") -Destination (Join-Path $Tmp "client\build") -Recurse -Force
 
-  $dockerContent = @"
-FROM node:18-alpine
-WORKDIR /app
-RUN apk add --no-cache python3 make g++
-COPY package*.json ./
-RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund
-COPY server/ ./server/
-COPY client/build ./server/public
-RUN mkdir -p /app/data/database /app/data/uploads
-EXPOSE 5000
-ENV NODE_ENV=production
-ENV PORT=5000
-CMD ["node", "server/index.js"]
-"@
-  $dockerContent | Out-File -FilePath (Join-Path $Tmp "Dockerfile") -Encoding utf8
+  # 根据 -Dockerfile 参数生成对应基础镜像的 Dockerfile
+  # 重要：onnxruntime-node（OCR）是 native 模块，预编译二进制是 glibc 的，
+  #       在 Alpine(musl) 上会崩溃 → 必须用 Debian(slim) 基础镜像。
+  $nl = [System.Environment]::NewLine
+  if ($Dockerfile -eq "Dockerfile.debian") {
+    $lines = @(
+      "FROM node:18-bullseye-slim",
+      "WORKDIR /app",
+      "RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ sqlite3 && rm -rf /var/lib/apt/lists/*",
+      "COPY package*.json ./",
+      "RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund",
+      "COPY server/ ./server/",
+      "COPY client/build ./server/public",
+      "RUN mkdir -p /app/data/database /app/data/uploads",
+      "EXPOSE 5000",
+      "ENV NODE_ENV=production",
+      "ENV PORT=5000",
+      'CMD ["node", "server/index.js"]'
+    )
+  } else {
+    $lines = @(
+      "FROM node:18-alpine",
+      "WORKDIR /app",
+      "RUN apk add --no-cache python3 make g++",
+      "COPY package*.json ./",
+      "RUN npm ci --omit=dev || npm install --omit=dev --no-audit --no-fund",
+      "COPY server/ ./server/",
+      "COPY client/build ./server/public",
+      "RUN mkdir -p /app/data/database /app/data/uploads",
+      "EXPOSE 5000",
+      "ENV NODE_ENV=production",
+      "ENV PORT=5000",
+      'CMD ["node", "server/index.js"]'
+    )
+  }
+  $cr = [char]13
+  $lf = [char]10
+  $crlf = $cr.ToString() + $lf.ToString()
+  $dockerContent = ($lines -join $crlf) + $crlf
+  [System.IO.File]::WriteAllText((Join-Path $Tmp "Dockerfile"), $dockerContent, [System.Text.UTF8Encoding]::new($false))
 } else {
   Write-Host "No client/build — copying client source (Docker will build frontend)."
   if (Test-Path (Join-Path $Root "client")) {

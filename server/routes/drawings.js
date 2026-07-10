@@ -1247,6 +1247,100 @@ router.put('/folders/:id', async (req, res) => {
   }
 });
 
+// 移动/重排目录（支持同级位置移动）
+// body: { parent_id, before_id?, after_id? }
+// - 不传 before_id/after_id：追加到 parent_id 下末尾
+// - before_id：插入到该目录之前（同级）
+// - after_id：插入到该目录之后（同级）
+router.put('/folders/:id/reorder', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const folderId = parseInt(req.params.id);
+    const { parent_id, before_id, after_id } = req.body;
+
+    // 检查目录是否存在且属于当前用户
+    const folder = await get(`SELECT * FROM drawing_folders WHERE id = ? AND user_id = ?`, [folderId, userId]);
+    if (!folder) {
+      return res.status(404).json({ error: '目录未找到或无权限' });
+    }
+
+    const newParentId = parent_id === undefined ? null : (parent_id || null);
+
+    // 校验不能移动到自身
+    if (newParentId === folderId) {
+      return res.status(400).json({ error: '不能将目录移动到自身' });
+    }
+
+    // 校验不能移动到自己的子孙目录下
+    const isDescendant = async (candidateParentId) => {
+      let cur = candidateParentId;
+      const guard = new Set();
+      while (cur) {
+        if (cur === folderId) return true;
+        if (guard.has(cur)) break; // 防御环
+        guard.add(cur);
+        const row = await get(`SELECT parent_id FROM drawing_folders WHERE id = ?`, [cur]);
+        cur = row ? row.parent_id : null;
+      }
+      return false;
+    };
+    if (newParentId && await isDescendant(newParentId)) {
+      return res.status(400).json({ error: '不能将目录移动到其子目录下' });
+    }
+
+    // 校验锚点（before_id / after_id）必须属于新的 parent_id
+    const anchorId = before_id || after_id;
+    if (anchorId) {
+      const anchor = await get(`SELECT parent_id FROM drawing_folders WHERE id = ? AND user_id = ?`, [anchorId, userId]);
+      const anchorParent = anchor ? (anchor.parent_id || null) : null;
+      const normalizedAnchorParent = anchorParent === null ? null : anchorParent;
+      const ok = (normalizedAnchorParent === null && newParentId === null) ||
+                 (normalizedAnchorParent !== null && normalizedAnchorParent === newParentId);
+      if (!ok) {
+        return res.status(400).json({ error: '参考目录不属于目标层级' });
+      }
+      if (anchorId === folderId) {
+        return res.status(400).json({ error: '参考目录不能是自身' });
+      }
+    }
+
+    // 先更新 parent_id（位置先不动）
+    await run(
+      `UPDATE drawing_folders SET parent_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [newParentId, folderId]
+    );
+
+    // 取目标父级下的所有直接子级（按 sort_order, name），排除正在移动的目录
+    const siblings = await query(
+      `SELECT id, sort_order FROM drawing_folders
+       WHERE user_id = ? AND ${newParentId ? 'parent_id = ?' : 'parent_id IS NULL'} AND id != ?
+       ORDER BY sort_order, name`,
+      newParentId ? [userId, newParentId, folderId] : [userId, folderId]
+    );
+
+    // 构建新顺序：在锚点前/后插入 folderId，否则追加到末尾
+    const ordered = [];
+    for (const s of siblings) {
+      if (before_id && s.id === before_id) ordered.push(folderId);
+      ordered.push(s.id);
+      if (after_id && s.id === after_id) ordered.push(folderId);
+    }
+    if (!ordered.includes(folderId)) ordered.push(folderId);
+
+    // 重排 sort_order（1, 2, 3...）—— 解决历史稀疏/重复
+    let order = 1;
+    for (const id of ordered) {
+      await run(`UPDATE drawing_folders SET sort_order = ? WHERE id = ?`, [order++, id]);
+    }
+
+    const updatedFolder = await get(`SELECT * FROM drawing_folders WHERE id = ?`, [folderId]);
+    res.json({ data: updatedFolder });
+  } catch (error) {
+    console.error('移动/重排目录失败', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 删除目录
 router.delete('/folders/:id', async (req, res) => {
   try {
