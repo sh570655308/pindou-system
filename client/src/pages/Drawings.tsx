@@ -57,6 +57,8 @@ const Drawings: React.FC = () => {
   const [referenceSalesPrice, setReferenceSalesPrice] = useState<number>(0);
   const [images, setImages] = useState<any[]>([]);
   const [completedCount, setCompletedCount] = useState<number>(0);
+  const [projectFilesByImage, setProjectFilesByImage] = useState<Record<number, { file_name?: string; file_size?: number; updated_at?: string }>>({});
+  const [projectFileBusy, setProjectFileBusy] = useState<boolean>(false);
   const [blueprintFile, setBlueprintFile] = useState<File | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
@@ -526,14 +528,16 @@ const Drawings: React.FC = () => {
   // =========================================
 
   // 辅助函数：渲染目录选项（包含缩进）
-  const renderFolderOptions = (folder: FolderNode, level: number = 0): React.ReactElement => {
+  // 渲染目录选项：显示完整路径（父级/父级/当前），避免同名末级目录混淆
+  const renderFolderOptions = (folder: FolderNode, level: number = 0, parentPath: string = ''): React.ReactElement => {
     const indent = level * 16;
+    const fullPath = parentPath ? `${parentPath} / ${folder.name}` : folder.name;
     return (
       <React.Fragment key={folder.id}>
         <option value={folder.id} style={{ paddingLeft: `${indent}px` }}>
-          {'  '.repeat(level)}{folder.name}
+          {fullPath}
         </option>
-        {folder.children && folder.children.map((child) => renderFolderOptions(child, level + 1))}
+        {folder.children && folder.children.map((child) => renderFolderOptions(child, level + 1, fullPath))}
       </React.Fragment>
     );
   };
@@ -564,6 +568,7 @@ const Drawings: React.FC = () => {
     setDescription('');
     setMaterials([]);
     setImages([]);
+    setProjectFilesByImage({});
     setBlueprintFile(null);
     setCompletionImageFile(null);
     setPrice(0);
@@ -576,7 +581,7 @@ const Drawings: React.FC = () => {
     setLoadingDetail(true);
     try {
       const res = await api.get(`/drawings/${id}`);
-      const { drawing, materials: serverMaterials, images: serverImages, price: serverPrice, referenceSalesPrice: refPrice, folders: drawingFolders } = res.data;
+      const { drawing, materials: serverMaterials, images: serverImages, price: serverPrice, referenceSalesPrice: refPrice, folders: drawingFolders, projectFilesByImage: serverPFMap } = res.data;
       setSelectedDrawing(drawing);
       setTitle(drawing.title || '');
       setDescription(drawing.description || '');
@@ -613,6 +618,7 @@ const Drawings: React.FC = () => {
       setImages(serverImages || []);
       setPrice(serverPrice || 0);
       setReferenceSalesPrice(refPrice || 0);
+      setProjectFilesByImage(serverPFMap || {});
 
       // 保存原始数据快照用于变更检测
       originalDrawingData.current = {
@@ -917,6 +923,173 @@ const Drawings: React.FC = () => {
     if (f) setBlueprintFile(f);
   };
 
+  // 上传项目文件（.pindou）到当前图纸，一份图纸只保留一个
+  // 项目文件上传：目标图片 id（由缩略图/弹窗按钮设置，再触发隐藏 input）
+  const projectFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [projectTargetImageId, setProjectTargetImageId] = useState<number | null>(null);
+  const handleProjectFileClick = (imageId: number) => {
+    setProjectTargetImageId(imageId);
+    if (projectFileInputRef.current) projectFileInputRef.current.click();
+  };
+  const handleProjectFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) { setProjectTargetImageId(null); return; }
+    if (!selectedDrawing || projectTargetImageId == null) { e.target.value = ''; setProjectTargetImageId(null); return; }
+    // 校验扩展名
+    const name = (f.name || '').toLowerCase();
+    if (!name.endsWith('.pindou') && !name.endsWith('.json')) {
+      alert('只支持 .pindou 或 .json 项目文件');
+      e.target.value = '';
+      setProjectTargetImageId(null);
+      return;
+    }
+    // 若该图片已有项目文件，确认替换
+    const existing = projectFilesByImage[projectTargetImageId];
+    if (existing) {
+      const ok = window.confirm(`该图片已有项目文件（${existing.file_name || ''}），是否替换？`);
+      if (!ok) { e.target.value = ''; setProjectTargetImageId(null); return; }
+    }
+    setProjectFileBusy(true);
+    try {
+      const form = new FormData();
+      form.append('project', f);
+      await api.post(`/drawings/${(selectedDrawing as any).id}/images/${projectTargetImageId}/project-file`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // 刷新详情以拿到新的 projectFilesByImage
+      await handleSelectDrawing((selectedDrawing as any).id);
+    } catch (err: any) {
+      console.error('上传项目文件失败', err);
+      alert('上传项目文件失败：' + (err?.response?.data?.error || err?.message || '未知错误'));
+    } finally {
+      setProjectFileBusy(false);
+      setProjectTargetImageId(null);
+      if (projectFileInputRef.current) projectFileInputRef.current.value = '';
+    }
+  };
+
+  // 下载某图片的项目文件
+  const handleDownloadProjectFile = async (imageId: number) => {
+    if (!selectedDrawing) return;
+    setProjectFileBusy(true);
+    try {
+      const res = await api.get(`/drawings/${(selectedDrawing as any).id}/images/${imageId}/project-file`, { responseType: 'blob' });
+      const cd = (res.headers['content-disposition'] || '').toString();
+      let fname = '';
+      const m = cd.match(/filename\*=UTF-8''([^;]+)/i);
+      if (m) fname = decodeURIComponent(m[1]);
+      if (!fname) fname = `${(selectedDrawing.title || 'drawing').replace(/[\\/:*?"<>|]/g, '_')}.pindou`;
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: any) {
+      console.error('下载项目文件失败', err);
+      const msg = err?.response?.data?.error || err?.message || '未知错误';
+      alert('下载项目文件失败：' + msg);
+    } finally {
+      setProjectFileBusy(false);
+    }
+  };
+
+  // 删除某图片的项目文件
+  const handleDeleteProjectFile = async (imageId: number) => {
+    if (!selectedDrawing) return;
+    if (!window.confirm('确认删除该图片的项目文件？')) return;
+    setProjectFileBusy(true);
+    try {
+      await api.delete(`/drawings/${(selectedDrawing as any).id}/images/${imageId}/project-file`);
+      await handleSelectDrawing((selectedDrawing as any).id);
+    } catch (err: any) {
+      console.error('删除项目文件失败', err);
+      alert('删除项目文件失败：' + (err?.response?.data?.error || err?.message || '未知错误'));
+    } finally {
+      setProjectFileBusy(false);
+    }
+  };
+
+  // 替换图片（弹窗/缩略图快捷按钮通用）：传 imageId，上传后刷新并保持弹窗打开
+  const replaceImageInputRef = useRef<HTMLInputElement | null>(null);
+  const [replaceTargetImageId, setReplaceTargetImageId] = useState<number | null>(null);
+  const [imageActionBusy, setImageActionBusy] = useState<boolean>(false);
+  const handleReplaceImageClick = (imageId: number) => {
+    setReplaceTargetImageId(imageId);
+    if (replaceImageInputRef.current) replaceImageInputRef.current.click();
+  };
+  const handleReplaceImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f || replaceTargetImageId == null || !selectedDrawing) { e.target.value = ''; return; }
+    setImageActionBusy(true);
+    try {
+      // 记录被替换图片的旧 file_path（替换后坐标失效，需清理旧 OCR 识别记录）
+      const oldImg = images.find((im) => im.id === replaceTargetImageId);
+      const oldFilePath = oldImg?.file_path;
+      const form = new FormData();
+      form.append('blueprint', f);
+      await api.post(`/drawings/${(selectedDrawing as any).id}/images/${replaceTargetImageId}/replace`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // 替换后图片内容变了，旧的框选/识别结果失效，清理该图片的 OCR 记录
+      if (oldFilePath) {
+        cleanupGridOcrForImage((selectedDrawing as any).id, oldFilePath);
+      }
+      // 刷新详情（handleSelectDrawing 内部 setImages，但 imagesRef 通过 effect 更新有延迟）
+      await handleSelectDrawing((selectedDrawing as any).id);
+      // 若弹窗开着，重新拉取该图纸的图片列表，找到替换后的同 id 图片并更新弹窗 src
+      if (showImageModal) {
+        try {
+          const detail = await api.get(`/drawings/${(selectedDrawing as any).id}`);
+          const refreshed = (detail.data?.images || []).find((im: any) => im.id === replaceTargetImageId);
+          if (refreshed) {
+            // 加 cache-busting 查询参数，避免浏览器用旧缓存
+            setImageModalSrc(`${window.location.origin}/uploads/drawings/${refreshed.file_path}?t=${Date.now()}`);
+            setImageModalImage(refreshed);
+            setImageScale(1);
+            setImagePosition({ x: 0, y: 0 });
+          }
+        } catch (e) {
+          console.warn('替换后刷新弹窗失败', e);
+        }
+      }
+    } catch (err: any) {
+      console.error('替换图片失败', err);
+      alert('替换图片失败：' + (err?.response?.data?.error || err?.message || '未知错误'));
+    } finally {
+      setImageActionBusy(false);
+      setReplaceTargetImageId(null);
+      if (replaceImageInputRef.current) replaceImageInputRef.current.value = '';
+    }
+  };
+
+  // 删除图片（弹窗/缩略图通用）
+  const handleDeleteImage = async (imageId: number, label?: string) => {
+    if (!selectedDrawing) return;
+    if (!window.confirm(`确认删除${label || '此图片'}？`)) return;
+    setImageActionBusy(true);
+    try {
+      // 记录被删图片的 file_path（删前从当前 images 取，删后刷新就拿不到了）
+      const deletedImg = images.find((im) => im.id === imageId);
+      const deletedFilePath = deletedImg?.file_path;
+      await api.delete(`/drawings/${(selectedDrawing as any).id}/images/${imageId}`);
+      // 若弹窗里看的就是这张图，关闭弹窗
+      if (showImageModal && imageModalImage && imageModalImage.id === imageId) {
+        setShowImageModal(false);
+        setImageScale(1);
+        setImagePosition({ x: 0, y: 0 });
+      }
+      await handleSelectDrawing((selectedDrawing as any).id);
+      // 同步清理该图片的网格 OCR 识别记录（localStorage 里按 filePath 存）
+      if (deletedFilePath) {
+        cleanupGridOcrForImage((selectedDrawing as any).id, deletedFilePath);
+      }
+    } catch (err: any) {
+      console.error('删除图片失败', err);
+      alert('删除失败：' + (err?.response?.data?.error || err?.message || '未知错误'));
+    } finally {
+      setImageActionBusy(false);
+    }
+  };
+
   // 已移除：handleCompletionFilesChange（完成图由完工记录管理）
 
   // 处理OCR识别结果
@@ -1163,10 +1336,16 @@ const Drawings: React.FC = () => {
   const [editSatisfaction, setEditSatisfaction] = useLocalStorageState<number | null>('drawings-editSatisfaction', null);
   const [showImageModal, setShowImageModal] = useLocalStorageState<boolean>('drawings-showImageModal', false);
   const [imageModalSrc, setImageModalSrc] = useLocalStorageState<string | null>('drawings-imageModalSrc', null);
+  const [imageModalImage, setImageModalImage] = useState<any>(null);
+  // 当前查看图片的项目文件（从 projectFilesByImage 按 imageId 取）
+  const currentImageProjectFile = imageModalImage ? projectFilesByImage[imageModalImage.id] : undefined;
   const [imageScale, setImageScale] = useState<number>(1);
   const [imagePosition, setImagePosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  // 拖动相关：用 ref 跟踪正在进行的拖动，避免依赖元素级事件（鼠标移出图片到工具栏时会丢失）
+  // didDragRef：本次按下后是否真的发生了拖动（移动距离超过阈值），用于 backdrop 点击判定时忽略"拖动收尾"
+  const dragRef = useRef<{ active: boolean; startX: number; startY: number; baseX: number; baseY: number; moved: boolean }>({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0, moved: false });
   const [showImportModal, setShowImportModal] = useLocalStorageState<boolean>('drawings-showImportModal', false);
   const [showOrderModal, setShowOrderModal] = useState<boolean>(false);
   const [orderForm, setOrderForm] = useState<any>({
@@ -1333,11 +1512,44 @@ const Drawings: React.FC = () => {
     }
   };
 
-  const openImageModal = (relPath?: string) => {
+  const openImageModal = (relPath?: string, imageObj?: any) => {
     if (!relPath) return;
     setImageModalSrc(`${window.location.origin}/uploads/drawings/${relPath}`);
+    setImageModalImage(imageObj || null);
     setShowImageModal(true);
   };
+
+  // 全局拖动监听：在 window 上跟踪 mousemove/mouseup，避免鼠标移出图片容器到工具栏/背景时丢失拖动状态
+  // 这样工具栏、背景区域都不会因为 drag-end 被误判为 click 而关闭弹窗
+  useEffect(() => {
+    if (!showImageModal) return;
+    const DRAG_THRESHOLD = 3; // 像素阈值：超过才算"真的拖动了"
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragRef.current.active) return;
+      const dx = e.clientX - dragRef.current.startX;
+      const dy = e.clientY - dragRef.current.startY;
+      if (!dragRef.current.moved && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)) {
+        dragRef.current.moved = true;
+      }
+      setImagePosition({
+        x: dragRef.current.baseX + dx,
+        y: dragRef.current.baseY + dy,
+      });
+    };
+    const onMouseUp = () => {
+      if (dragRef.current.active) {
+        dragRef.current.active = false;
+        setIsDragging(false);
+        // 给 click 事件一个微任务窗口能读到 moved 标志；click 在 mouseup 后同步派发，无需延时
+      }
+    };
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [showImageModal]);
 
   const downloadFile = async (relPath?: string, filename?: string) => {
     if (!relPath) {
@@ -1363,6 +1575,32 @@ const Drawings: React.FC = () => {
       console.error('下载失败', err);
       alert('下载失败：' + (err && (err as Error).message ? (err as Error).message : '未知错误'));
     }
+  };
+
+  // 网格 OCR 识别记录的 localStorage 清理（记录跟随图片，图删则记录删）
+  // key = pindou:gridOcr:<drawingId>，value = [{ filePath, st }]；按 filePath 过滤掉被删图片
+  const cleanupGridOcrForImage = (drawingId: number, filePath: string) => {
+    try {
+      const key = `pindou:gridOcr:${drawingId}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const arr = JSON.parse(raw) as Array<{ filePath: string; st: any }>;
+      const filtered = arr.filter((it) => it.filePath !== filePath);
+      if (filtered.length === 0) {
+        // 该图纸已无任何识别记录，整条删除
+        localStorage.removeItem(key);
+      } else if (filtered.length !== arr.length) {
+        localStorage.setItem(key, JSON.stringify(filtered));
+      }
+    } catch (e) {
+      // localStorage 异常不影响主流程
+    }
+  };
+  // 删除整张图纸时，清掉它所有的识别记录
+  const cleanupGridOcrForDrawing = (drawingId: number) => {
+    try {
+      localStorage.removeItem(`pindou:gridOcr:${drawingId}`);
+    } catch (e) { /* 忽略 */ }
   };
 
   const handleBulkBomSubmit = async () => {
@@ -1765,7 +2003,10 @@ const Drawings: React.FC = () => {
                       <button onClick={async () => {
                         if (!window.confirm('确认删除此图纸？此操作不可撤销。')) return;
                         try {
-                          await api.delete(`/drawings/${(selectedDrawing as any).id}`);
+                          const delId = (selectedDrawing as any).id;
+                          await api.delete(`/drawings/${delId}`);
+                          // 清理该图纸的网格 OCR 识别记录
+                          cleanupGridOcrForDrawing(delId);
                           setSelectedDrawing(null);
                           const newPage = drawings.length <= 1 && currentPage > 1 ? currentPage - 1 : currentPage;
                           await loadDrawings(newPage);
@@ -1878,87 +2119,52 @@ const Drawings: React.FC = () => {
 
                 <div className="flex-1 min-w-[220px]">
                   <h5 className="text-sm font-medium">图纸（缩略图）</h5>
-                  <div className="mt-2 flex items-start space-x-4">
-                    {(() => {
-                      const blueprint = images.find((im) => im.image_type === 'blueprint');
-                      if (!blueprint) {
-                        return <div className="text-gray-500">暂无图纸</div>;
-                      }
-                      return (
-                        <div className="w-36 h-36 border rounded overflow-hidden relative flex-shrink-0">
-                          <img
-                            src={`${window.location.origin}/uploads/drawings/${blueprint.file_path}`}
-                            alt={blueprint.file_name}
-                            title={blueprint.file_name}
-                            className="w-full h-full object-cover cursor-pointer"
-                            style={{ transform: 'scale(1.25)', transformOrigin: 'center' }}
-                            onClick={() => openImageModal(blueprint.file_path)}
-                            onError={(e) => {
-                              console.error('图片加载失败:', e.currentTarget.src);
-                              e.currentTarget.style.display = 'none';
-                            }}
-                          />
-                          <button onClick={(e) => {
-                            e.stopPropagation();
-                            downloadFile(blueprint.file_path, blueprint.file_name || 'drawing.jpg');
-                          }} className="absolute top-1 right-8 bg-black bg-opacity-50 text-white rounded-full p-1 hover:opacity-100 transition-opacity z-10" title="下载图纸">
-                            ↓
-                          </button>
-                          <button onClick={async (e) => {
-                            e.stopPropagation();
-                            if (!window.confirm('确认删除此图纸？')) return;
-                            try {
-                              await api.delete(`/drawings/${(selectedDrawing as any).id}/images/${blueprint.id}`);
-                              await handleSelectDrawing((selectedDrawing as any).id);
-                            } catch (err) {
-                              console.error('删除图纸失败', err);
-                              alert('删除失败');
-                            }
-                          }} className="absolute top-1 right-1 bg-black bg-opacity-50 text-white rounded-full p-1 hover:opacity-100 transition-opacity z-10" title="删除图纸">
-                            ×
-                          </button>
-                        </div>
-                      );
-                    })()}
-
-                    {images && images.filter((im) => im.image_type !== 'blueprint').length > 0 && (
-                      <div className="flex space-x-2 overflow-auto">
-                        {images
-                          .filter((im) => im.image_type !== 'blueprint')
-                          .sort((a, b) => {
-                            const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-                            const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-                            return tb - ta; // newest first
-                          })
-                          .map((im) => (
-                            <div key={im.id} className="w-16 h-16 border rounded overflow-hidden relative flex-shrink-0">
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {images && images.length > 0 ? (
+                      images
+                        .slice()
+                        .sort((a, b) => {
+                          // blueprint 排最前；其余按 sort_order + created_at 升序
+                          const ta = a.image_type === 'blueprint' ? -1 : 0;
+                          const tb = b.image_type === 'blueprint' ? -1 : 0;
+                          if (ta !== tb) return ta - tb;
+                          const sa = typeof a.sort_order === 'number' ? a.sort_order : 0;
+                          const sb = typeof b.sort_order === 'number' ? b.sort_order : 0;
+                          if (sa !== sb) return sa - sb;
+                          const ca = a.created_at ? new Date(a.created_at).getTime() : 0;
+                          const cb = b.created_at ? new Date(b.created_at).getTime() : 0;
+                          return ca - cb;
+                        })
+                        .map((im) => {
+                          const isBlueprint = im.image_type === 'blueprint';
+                          const hasProject = !!projectFilesByImage[im.id];
+                          return (
+                            <div key={im.id} className="w-28 h-28 border rounded overflow-hidden relative flex-shrink-0">
                               <img
                                 src={`${window.location.origin}/uploads/drawings/${im.file_path}`}
                                 alt={im.file_name}
-                                title={im.file_name}
+                                title={(isBlueprint ? '【图纸】' : '') + (im.file_name || '')}
                                 className="w-full h-full object-cover cursor-pointer"
-                                onClick={() => openImageModal(im.file_path)}
+                                onClick={() => openImageModal(im.file_path, im)}
                                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
                               />
-                              <button onClick={(e) => { e.stopPropagation(); downloadFile(im.file_path, im.file_name || `img-${im.id}.jpg`); }} className="absolute top-1 right-8 bg-black bg-opacity-50 text-white rounded-full p-1 hover:opacity-100 transition-opacity z-10" title="下载图片">
-                                ↓
-                              </button>
-                              <button onClick={async (e) => {
-                                e.stopPropagation();
-                                if (!window.confirm('确认删除此图片？')) return;
-                                try {
-                                  await api.delete(`/drawings/${(selectedDrawing as any).id}/images/${im.id}`);
-                                  await handleSelectDrawing((selectedDrawing as any).id);
-                                } catch (err) {
-                                  console.error('删除图片失败', err);
-                                  alert('删除失败');
-                                }
-                              }} className="absolute top-1 right-1 bg-black bg-opacity-50 text-white rounded-full p-1 hover:opacity-100 transition-opacity z-10" title="删除图片">
-                                ×
-                              </button>
+                              {/* 左下角角标：项目文件状态（有=P绿底，无=灰底半透明） */}
+                              <span
+                                className={`absolute bottom-1 left-1 w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold text-white ${hasProject ? 'bg-emerald-600' : 'bg-gray-500 bg-opacity-60'}`}
+                                title={hasProject ? `含项目文件：${projectFilesByImage[im.id].file_name || ''}` : '未绑定项目文件'}
+                              >
+                                P
+                              </span>
+                              {/* 快捷按钮（右上角纵向排列）：替换图片 / 上传项目 / 下载 / 删除 —— 每张图都一样 */}
+                              <button onClick={(e) => { e.stopPropagation(); handleReplaceImageClick(im.id); }} disabled={imageActionBusy} style={{ top: 4 }} className="absolute right-1 w-6 h-6 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-full text-xs hover:bg-opacity-80 transition-opacity z-10" title="替换图片">⟳</button>
+                              <button onClick={(e) => { e.stopPropagation(); handleProjectFileClick(im.id); }} disabled={projectFileBusy} style={{ top: 32 }} className="absolute right-1 w-6 h-6 flex items-center justify-center bg-indigo-600 bg-opacity-80 text-white rounded-full text-[10px] font-bold hover:bg-opacity-100 transition-opacity z-10" title={hasProject ? '替换项目文件（.pindou）' : '上传项目文件（.pindou）'}>P</button>
+                              <button onClick={(e) => { e.stopPropagation(); downloadFile(im.file_path, im.file_name || `img-${im.id}.jpg`); }} style={{ top: 60 }} className="absolute right-1 w-6 h-6 flex items-center justify-center bg-black bg-opacity-50 text-white rounded-full text-xs hover:bg-opacity-80 transition-opacity z-10" title="下载图片">↓</button>
+                              <button onClick={(e) => { e.stopPropagation(); handleDeleteImage(im.id, '此图片'); }} disabled={imageActionBusy} style={{ top: 88 }} className="absolute right-1 w-6 h-6 flex items-center justify-center bg-red-600 bg-opacity-80 text-white rounded-full text-xs hover:bg-opacity-100 transition-opacity z-10" title="删除图片">×</button>
                             </div>
-                          ))}
-                      </div>
+                          );
+                        })
+                    ) : (
+                      <div className="text-gray-500">暂无图片</div>
                     )}
                   </div>
                 </div>
@@ -2267,11 +2473,15 @@ const Drawings: React.FC = () => {
             <div
               className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 overflow-hidden"
               onClick={(e) => {
-                if (e.target === e.currentTarget) {
+                // 点击背景空白处关闭；但如果刚刚是拖动收尾（mousedown 在图片、mouseup 在背景），
+                // 由于全局 dragRef.moved = true，这里忽略本次 click，避免拖到工具栏区域时误关弹窗。
+                if (e.target === e.currentTarget && !dragRef.current.moved) {
                   setShowImageModal(false);
                   setImageScale(1);
                   setImagePosition({ x: 0, y: 0 });
                 }
+                // 不论是否关闭，都重置 moved 标志，确保下一次 click 正常判定
+                dragRef.current.moved = false;
               }}
               onWheel={(e) => {
                 e.preventDefault();
@@ -2280,7 +2490,21 @@ const Drawings: React.FC = () => {
               }}
             >
               {/* 工具栏 */}
-              <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-white bg-opacity-90 rounded-lg px-4 py-2 flex items-center gap-4 z-50 shadow-lg">
+              <div
+                className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-white bg-opacity-90 rounded-lg px-4 py-2 flex items-center gap-4 z-50 shadow-lg"
+                // 工具栏：阻止其上的 mousedown/mouseup 冒泡到 backdrop，避免拖动结束在此处时触发 backdrop click
+                onMouseDown={(e) => e.stopPropagation()}
+                onMouseUp={(e) => {
+                  e.stopPropagation();
+                  // 在工具栏上释放鼠标时，若刚才在拖动则标记已消费，防止后续合成 click 触发关闭
+                  dragRef.current.moved = dragRef.current.moved || dragRef.current.active;
+                }}
+                onClick={(e) => {
+                  // 拖动收尾的合成 click 落在工具栏：消费 moved 标志，不让它影响下一次交互
+                  e.stopPropagation();
+                  dragRef.current.moved = false;
+                }}
+              >
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -2312,6 +2536,62 @@ const Drawings: React.FC = () => {
                 >
                   重置
                 </button>
+                {/* 分隔线 */}
+                <span className="w-px h-6 bg-gray-300" />
+                {/* 图片操作：替换 / 下载 / 删除 */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) handleReplaceImageClick(imageModalImage.id); }}
+                  disabled={!imageModalImage || imageActionBusy}
+                  className="px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 transition-colors disabled:bg-gray-300"
+                  title="用新图片替换当前图片（保持类型和位置）"
+                >
+                  替换图片
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) downloadFile(imageModalImage.file_path, imageModalImage.file_name || 'drawing.jpg'); }}
+                  disabled={!imageModalImage}
+                  className="px-3 py-1 bg-emerald-500 text-white rounded hover:bg-emerald-600 transition-colors disabled:bg-gray-300"
+                  title="下载当前图片"
+                >
+                  下载图片
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) handleDeleteImage(imageModalImage.id, '此图片'); }}
+                  disabled={!imageModalImage || imageActionBusy}
+                  className="px-3 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors disabled:bg-gray-300"
+                  title="删除当前图片"
+                >
+                  删除图片
+                </button>
+                {/* 分隔线 */}
+                <span className="w-px h-6 bg-gray-300" />
+                {/* 项目文件操作：针对当前查看的图片（上传 / 下载 / 删除） */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) handleProjectFileClick(imageModalImage.id); }}
+                  disabled={!imageModalImage || projectFileBusy}
+                  className="px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 transition-colors disabled:bg-gray-300"
+                  title="上传 .pindou 项目文件，绑定到当前图片"
+                >
+                  上传项目
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) handleDownloadProjectFile(imageModalImage.id); }}
+                  disabled={!imageModalImage || !currentImageProjectFile || projectFileBusy}
+                  className="px-3 py-1 bg-teal-500 text-white rounded hover:bg-teal-600 transition-colors disabled:bg-gray-300"
+                  title={!currentImageProjectFile ? '该图片暂无项目文件' : '下载项目文件'}
+                >
+                  下载项目
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (imageModalImage) handleDeleteProjectFile(imageModalImage.id); }}
+                  disabled={!imageModalImage || !currentImageProjectFile || projectFileBusy}
+                  className="px-3 py-1 bg-rose-500 text-white rounded hover:bg-rose-600 transition-colors disabled:bg-gray-300"
+                  title="删除项目文件"
+                >
+                  删除项目
+                </button>
+                {/* 分隔线 */}
+                <span className="w-px h-6 bg-gray-300" />
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -2324,6 +2604,12 @@ const Drawings: React.FC = () => {
                   关闭
                 </button>
               </div>
+              {/* 项目文件状态提示（针对当前查看的图片） */}
+              <div className="fixed top-16 left-1/2 transform -translate-x-1/2 text-xs text-white bg-black bg-opacity-50 px-3 py-1 rounded z-50">
+                {projectFileBusy ? '项目文件处理中...' : currentImageProjectFile ? (
+                  <>项目文件：{currentImageProjectFile.file_name || '已绑定'}{currentImageProjectFile.file_size ? `（${(currentImageProjectFile.file_size / 1024).toFixed(1)} KB）` : ''}</>
+                ) : '该图片未绑定项目文件'}
+              </div>
 
               {/* 图片容器 */}
               <div
@@ -2334,25 +2620,24 @@ const Drawings: React.FC = () => {
                 }}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  setIsDragging(true);
+                  e.stopPropagation();
+                  // 进入新的拖动：记录起点、基准位置、重置 moved 标志
+                  dragRef.current = {
+                    active: true,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    baseX: imagePosition.x,
+                    baseY: imagePosition.y,
+                    moved: false,
+                  };
                   setDragStart({ x: e.clientX - imagePosition.x, y: e.clientY - imagePosition.y });
+                  setIsDragging(true);
                 }}
-                onMouseMove={(e) => {
-                  if (isDragging) {
-                    e.preventDefault();
-                    setImagePosition({
-                      x: e.clientX - dragStart.x,
-                      y: e.clientY - dragStart.y,
-                    });
-                  }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // 拖动收尾的 click 不应触发任何额外行为；重置 moved 标志
+                  dragRef.current.moved = false;
                 }}
-                onMouseUp={() => {
-                  setIsDragging(false);
-                }}
-                onMouseLeave={() => {
-                  setIsDragging(false);
-                }}
-                onClick={(e) => e.stopPropagation()}
               >
                 <img
                   src={imageModalSrc}
@@ -2363,6 +2648,22 @@ const Drawings: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* 隐藏的文件输入：项目文件上传 + 图片替换（弹窗工具栏/缩略图都触发，始终挂载避免卸载时失效） */}
+          <input
+            ref={projectFileInputRef}
+            type="file"
+            accept=".pindou,.json"
+            onChange={handleProjectFileChange}
+            className="hidden"
+          />
+          <input
+            ref={replaceImageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleReplaceImageChange}
+            className="hidden"
+          />
 
           {/* 销售订单录入弹窗 */}
           {showOrderModal && (
@@ -2640,8 +2941,10 @@ const Drawings: React.FC = () => {
         {/* 图纸网格识别弹窗 */}
         {showDrawingGridOcr && selectedDrawing && (
           <DrawingGridOcrModal
+            drawingId={selectedDrawing.id}
             images={images}
             products={products}
+            existingMaterials={materials}
             onConfirm={handleGridOcrConfirm}
             onClose={() => setShowDrawingGridOcr(false)}
           />

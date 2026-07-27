@@ -4,13 +4,14 @@
 
 .DESCRIPTION
   This script creates a deployment package for Docker deployment.
-  Use -Dockerfile parameter to choose between Alpine (default) or Debian base image.
+  Default uses Debian base image (required for onnxruntime-node / OCR).
+  Use -Dockerfile "Dockerfile" to force Alpine (NOT recommended, OCR will crash on musl).
 
 .PARAMETER OutZip
   Output zip file name (optional, auto-generated if not specified)
 
 .PARAMETER Dockerfile
-  Dockerfile to use: "Dockerfile" (Alpine, default) or "Dockerfile.debian" (Debian)
+  Base image: "Dockerfile.debian" (Debian, default) or "Dockerfile" (Alpine, OCR 不工作)
 
 .EXAMPLE
   .\create_deploy_zip.ps1
@@ -20,7 +21,9 @@
 #>
 param(
   [string]$OutZip = "",
-  [string]$Dockerfile = "Dockerfile"  # Options: "Dockerfile" (Alpine) or "Dockerfile.debian" (Debian)
+  # Default: Debian. onnxruntime-node ships glibc binaries; musl (Alpine) will crash.
+  # Use "Dockerfile" only if you do not need OCR.
+  [string]$Dockerfile = "Dockerfile.debian"
 )
 
 $Root = Split-Path -Path $MyInvocation.MyCommand.Definition -Parent

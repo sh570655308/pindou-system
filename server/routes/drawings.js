@@ -29,6 +29,24 @@ router.use(authenticateToken);
 // multer instance for meta uploads (memory storage)
 const metaUpload = multer();
 
+// multer instance for .pindou project file uploads (disk storage, 与图纸图片同目录)
+// 单独实例：fileUpload.js 的 fileFilter 只允许图片，这里接受 .pindou/.json
+const projectStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const drawingId = req.params.id || req.body.drawingId || 'temp';
+    const dir = path.join(drawingsDir, String(drawingId));
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, `project_${Date.now()}.pindou`);
+  },
+});
+const projectUpload = multer({
+  storage: projectStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
+
 // 列表：分页查询当前用户的图纸
 router.get('/', async (req, res) => {
   try {
@@ -182,13 +200,24 @@ router.get('/:id', async (req, res) => {
     // 计算参考售价 = 总物料数量 × 单个物料售价
     const referenceSalesPrice = totalMaterialQuantity * unitPricePerMaterial;
 
+    // 查询该图纸所有图片的项目文件（image_id → { file_name, file_size, updated_at }）
+    const pfRows = await query(
+      `SELECT image_id, file_name, file_size, updated_at FROM drawing_project_files WHERE drawing_id = ?`,
+      [drawingId]
+    );
+    const projectFilesByImage = {};
+    pfRows.forEach((r) => {
+      projectFilesByImage[r.image_id] = { file_name: r.file_name, file_size: r.file_size, updated_at: r.updated_at };
+    });
+
     res.json({
       drawing,
       images,
       materials,
       price: totalPrice,
       referenceSalesPrice,
-      totalMaterialQuantity
+      totalMaterialQuantity,
+      projectFilesByImage
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -576,6 +605,173 @@ router.get('/:id/meta', async (req, res) => {
     res.status(500).json({ error: err.message || 'read meta failed' });
   }
 });
+
+// ===== 项目文件（.pindou）管理：一份图纸对应一个项目文件 =====
+
+// 上传/替换项目文件（FormData 字段：project）
+// ===== 项目文件（.pindou）管理：一张图片对应一个项目文件 =====
+
+// 上传/替换某图片的项目文件（FormData 字段：project）
+router.post('/:id/images/:imageId/project-file', projectUpload.single('project'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const drawingId = req.params.id;
+    const imageId = req.params.imageId;
+    const drawing = await get(`SELECT * FROM drawings WHERE id = ? AND user_id = ?`, [drawingId, userId]);
+    if (!drawing) return res.status(404).json({ error: '图纸未找到或无权限' });
+    const img = await get(`SELECT * FROM drawing_images WHERE id = ? AND drawing_id = ?`, [imageId, drawingId]);
+    if (!img) return res.status(404).json({ error: '图片未找到' });
+    if (!req.file) return res.status(400).json({ error: '缺少 project 上传字段' });
+
+    // 校验扩展名（.pindou / .json）
+    const uploadName = req.file.originalname || '';
+    const ext = path.extname(uploadName).toLowerCase();
+    if (ext && !['.pindou', '.json'].includes(ext)) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+      return res.status(400).json({ error: '只允许上传 .pindou 或 .json 项目文件' });
+    }
+
+    // 显示用文件名：multer 的 originalname 对中文常乱码，
+    // 改用该图片自身的 file_name 去扩展名 + .pindou，避免乱码且与图片对应。
+    // 回退顺序：图片文件名 → 图纸标题 → 'project'
+    let baseName = '';
+    if (img.file_name) baseName = path.basename(img.file_name, path.extname(img.file_name));
+    if (!baseName) baseName = (drawing.title || 'project').replace(/[\\/:*?"<>|]/g, '_');
+    const displayName = `${baseName}.pindou`;
+
+    // 相对路径（相对于 drawingsDir），存库
+    const relPath = path.join(String(drawingId), req.file.filename);
+
+    // 若该图片已有项目文件，先删旧文件，再 UPSERT（按 image_id 唯一）
+    const existing = await get(`SELECT * FROM drawing_project_files WHERE image_id = ?`, [imageId]);
+    if (existing) {
+      try {
+        const oldFullPath = path.join(drawingsDir, existing.file_path);
+        if (fs.existsSync(oldFullPath)) fs.unlinkSync(oldFullPath);
+      } catch (e) { /* 旧文件可能已不存在，忽略 */ }
+      await run(
+        `UPDATE drawing_project_files SET file_path = ?, file_name = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP WHERE image_id = ?`,
+        [relPath, displayName, req.file.size, imageId]
+      );
+    } else {
+      await run(
+        `INSERT INTO drawing_project_files (image_id, drawing_id, file_path, file_name, file_size) VALUES (?, ?, ?, ?, ?)`,
+        [imageId, drawingId, relPath, displayName, req.file.size]
+      );
+    }
+
+    console.log(`[drawings] project file saved for image ${imageId} (drawing ${drawingId}) -> ${relPath}`);
+    res.json({ ok: true, image_id: Number(imageId), file_name: displayName, file_size: req.file.size });
+  } catch (err) {
+    console.error('[drawings] upload project file failed', err);
+    res.status(500).json({ error: err.message || '上传项目文件失败' });
+  }
+});
+
+// 下载某图片的项目文件
+router.get('/:id/images/:imageId/project-file', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const drawingId = req.params.id;
+    const imageId = req.params.imageId;
+    const drawing = await get(`SELECT * FROM drawings WHERE id = ? AND user_id = ?`, [drawingId, userId]);
+    if (!drawing) return res.status(404).json({ error: '图纸未找到或无权限' });
+
+    const pf = await get(`SELECT * FROM drawing_project_files WHERE image_id = ?`, [imageId]);
+    if (!pf) return res.status(404).json({ error: '该图片暂无项目文件' });
+
+    const fullPath = path.join(drawingsDir, pf.file_path);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: '项目文件不存在' });
+
+    // 下载文件名：优先库里的 file_name，否则用图纸标题
+    const safeTitle = (drawing.title || 'drawing').replace(/[\/\\:?<>|"*]/g, '').replace(/\s+/g, '_');
+    const dlName = (pf.file_name && pf.file_name.trim()) ? pf.file_name : `${safeTitle}.pindou`;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(dlName)}`);
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (err) {
+    console.error('[drawings] download project file failed', err);
+    res.status(500).json({ error: err.message || '下载项目文件失败' });
+  }
+});
+
+// 删除某图片的项目文件
+router.delete('/:id/images/:imageId/project-file', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const drawingId = req.params.id;
+    const imageId = req.params.imageId;
+    const drawing = await get(`SELECT * FROM drawings WHERE id = ? AND user_id = ?`, [drawingId, userId]);
+    if (!drawing) return res.status(404).json({ error: '图纸未找到或无权限' });
+
+    const pf = await get(`SELECT * FROM drawing_project_files WHERE image_id = ?`, [imageId]);
+    if (!pf) return res.status(404).json({ error: '该图片暂无项目文件' });
+
+    try {
+      const fullPath = path.join(drawingsDir, pf.file_path);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (e) { /* 文件可能已不存在，忽略 */ }
+    await run(`DELETE FROM drawing_project_files WHERE image_id = ?`, [imageId]);
+    console.log(`[drawings] project file deleted for image ${imageId}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[drawings] delete project file failed', err);
+    res.status(500).json({ error: err.message || '删除项目文件失败' });
+  }
+});
+
+// 替换指定图片（同 id，删旧文件 + 更新 file_path/file_name/file_size/mime_type/thumbnail）
+router.post('/:id/images/:imageId/replace', upload.single('blueprint'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const drawingId = req.params.id;
+    const imageId = req.params.imageId;
+    const drawing = await get(`SELECT * FROM drawings WHERE id = ? AND user_id = ?`, [drawingId, userId]);
+    if (!drawing) return res.status(404).json({ error: '图纸未找到或无权限' });
+    if (!req.file) return res.status(400).json({ error: '缺少 blueprint 上传字段' });
+
+    const img = await get(`SELECT * FROM drawing_images WHERE id = ? AND drawing_id = ?`, [imageId, drawingId]);
+    if (!img) return res.status(404).json({ error: '图片未找到' });
+
+    const f = req.file;
+    const filePath = `${drawingId}/${f.filename}`;
+    // 生成新缩略图
+    let thumbnailPath = img.thumbnail_path || null;
+    try {
+      const sourcePath = path.join(drawingsDir, filePath);
+      const thumbFilename = `thumb_${f.filename.replace(/\.[^.]+$/, '.jpg')}`;
+      const thumbFullPath = path.join(drawingsDir, String(drawingId), thumbFilename);
+      await sharp(sourcePath).resize(150, 150, { fit: 'cover' }).jpeg({ quality: 80 }).toFile(thumbFullPath);
+      thumbnailPath = `${drawingId}/${thumbFilename}`;
+    } catch (e) {
+      console.error('[drawings] replace-image thumbnail failed:', e.message);
+    }
+
+    // 删旧文件 + 旧缩略图
+    try {
+      const oldFullPath = path.join(drawingsDir, img.file_path);
+      if (fs.existsSync(oldFullPath)) fs.unlinkSync(oldFullPath);
+    } catch (e) {}
+    if (img.thumbnail_path) {
+      try {
+        const oldThumb = path.join(drawingsDir, img.thumbnail_path);
+        if (fs.existsSync(oldThumb)) fs.unlinkSync(oldThumb);
+      } catch (e) {}
+    }
+
+    // 更新记录（保持 image_type / sort_order 不变）
+    await run(
+      `UPDATE drawing_images SET file_path = ?, file_name = ?, file_size = ?, mime_type = ?, thumbnail_path = ? WHERE id = ?`,
+      [filePath, f.originalname, f.size, f.mimetype, thumbnailPath, imageId]
+    );
+    console.log(`[drawings] image ${imageId} replaced for drawing ${drawingId}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[drawings] replace image failed', err);
+    res.status(500).json({ error: err.message || '替换图片失败' });
+  }
+});
+
 // 删除指定图片
 router.delete('/:id/images/:imageId', async (req, res) => {
   try {
@@ -592,6 +788,31 @@ router.delete('/:id/images/:imageId', async (req, res) => {
     await deleteFile(img.file_path);
     await run(`DELETE FROM drawing_images WHERE id = ?`, [imageId]);
     console.log(`[drawings] user ${userId} deleted image ${imageId} from drawing ${drawingId}`);
+
+    // 如果删除的是 blueprint（图纸/缩略图），需要从剩下的图片中提升一张为新 blueprint
+    // 否则会出现"第一个图纸位空、新图只在第二位"的现象（upload-then-delete 场景）
+    // 候选优先级：1) 已有的其他 blueprint（理论上不存在，兜底）2) sort_order 最小的 completion（最早传的成品图）
+    // 3) 任意剩余图片；都没有则保持无图纸状态
+    if (img.image_type === 'blueprint') {
+      const candidate = await get(
+        `SELECT * FROM drawing_images
+         WHERE drawing_id = ?
+         ORDER BY CASE WHEN image_type = 'blueprint' THEN 0
+                       WHEN image_type = 'completion' THEN 1
+                       ELSE 2 END,
+                  sort_order ASC,
+                  created_at ASC
+         LIMIT 1`,
+        [drawingId]
+      );
+      if (candidate) {
+        await run(
+          `UPDATE drawing_images SET image_type = 'blueprint', sort_order = 0 WHERE id = ?`,
+          [candidate.id]
+        );
+        console.log(`[drawings] auto-promoted image ${candidate.id} to blueprint for drawing ${drawingId}`);
+      }
+    }
     res.json({ message: '图片删除成功' });
   } catch (error) {
     res.status(500).json({ error: error.message });

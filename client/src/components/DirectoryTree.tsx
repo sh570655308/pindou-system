@@ -320,6 +320,85 @@ const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   onFolderDrop,
   loading = false
 }) => {
+  // 可滚动容器引用 —— 拖到顶部/底部边缘时自动滚动
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // 自动滚动 rAF 句柄
+  const autoScrollRafRef = useRef<number | null>(null);
+  // 最近一次拖放事件的位置（rAF 循环据此决定是否继续滚动）
+  const lastDragClientYRef = useRef<number | null>(null);
+  // 边缘触发滚动的阈值（px）与最大滚动速度（px/帧）
+  const EDGE_THRESHOLD = 48;
+  const MAX_SPEED = 14;
+
+  // 启动/停止自动滚动循环
+  const startAutoScroll = () => {
+    if (autoScrollRafRef.current != null) return; // 已在运行
+    const tick = () => {
+      const el = scrollContainerRef.current;
+      const y = lastDragClientYRef.current;
+      if (el == null || y == null) {
+        autoScrollRafRef.current = null;
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const topDist = y - rect.top;
+      const bottomDist = rect.bottom - y;
+      let delta = 0;
+      if (topDist < EDGE_THRESHOLD && topDist >= 0) {
+        // 越靠近顶部速度越快
+        const ratio = 1 - topDist / EDGE_THRESHOLD;
+        delta = -Math.ceil(MAX_SPEED * ratio);
+      } else if (bottomDist < EDGE_THRESHOLD && bottomDist >= 0) {
+        const ratio = 1 - bottomDist / EDGE_THRESHOLD;
+        delta = Math.ceil(MAX_SPEED * ratio);
+      }
+      if (delta !== 0) {
+        el.scrollTop += delta;
+      }
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(tick);
+  };
+
+  const stopAutoScroll = () => {
+    if (autoScrollRafRef.current != null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+    lastDragClientYRef.current = null;
+  };
+
+  // 拖放开始/结束生命周期：用 capture 阶段监听整个文档
+  useEffect(() => {
+    const onDragStart = (e: DragEvent) => {
+      // 只在目录树内发起的拖拽才启用自动滚动
+      if (!scrollContainerRef.current) return;
+      if (!scrollContainerRef.current.contains(e.target as Node)) return;
+      lastDragClientYRef.current = e.clientY;
+      startAutoScroll();
+    };
+    const onDragEnd = () => {
+      stopAutoScroll();
+    };
+    const onDragOver = (e: DragEvent) => {
+      // 持续更新鼠标 Y 位置；rAF 循环据此判断是否在边缘
+      lastDragClientYRef.current = e.clientY;
+    };
+    // dragover 在 dragstart 之前就可能触发（理论上不会，但保险起见统一处理）
+    document.addEventListener('dragstart', onDragStart, true);
+    document.addEventListener('dragend', onDragEnd, true);
+    document.addEventListener('dragover', onDragOver, true);
+    document.addEventListener('drop', onDragEnd, true);
+    return () => {
+      document.removeEventListener('dragstart', onDragStart, true);
+      document.removeEventListener('dragend', onDragEnd, true);
+      document.removeEventListener('dragover', onDragOver, true);
+      document.removeEventListener('drop', onDragEnd, true);
+      // 组件卸载时务必停止 rAF
+      stopAutoScroll();
+    };
+  }, []);
+
   // 构建 id -> 子孙 id 集合的索引，用于禁止把目录拖入自己的子树
   const descendantIndex = React.useMemo(() => {
     const index = new Map<number, Set<number>>();
@@ -347,7 +426,10 @@ const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   );
 
   return (
-    <div className="directory-tree">
+    <div
+      ref={scrollContainerRef}
+      className="directory-tree max-h-[70vh] overflow-y-auto pr-1"
+    >
       {/* 全部图纸选项 */}
       <div
         className={`folder-node-content flex items-center py-2 px-2 cursor-pointer hover:bg-gray-100 rounded-md mb-1 ${

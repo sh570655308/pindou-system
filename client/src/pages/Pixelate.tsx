@@ -5,6 +5,7 @@ import StatsPanel from '../components/StatsPanel';
 import PixelToolbar from '../components/PixelToolbar';
 import LayerPanel, { Layer } from '../components/LayerPanel';
 import MaterialPickerModal from '../components/MaterialPickerModal';
+import MappingEditorModal, { MappingChange } from '../components/MappingEditorModal';
 import { useLocalStorageState } from '../utils/useLocalStorageState';
 import { useBrushPresets } from '../hooks/useBrushPresets';
 import { debounce } from '../utils/debounce';
@@ -128,6 +129,7 @@ const PixelatePage: React.FC = () => {
   const [stats, setStats] = useLocalStorageState<any[]>('pixelate-stats', []);
   const [highlightedProductId, setHighlightedProductId] = useLocalStorageState<number | null>('pixelate-highlightedProductId', null);
   const [statsVisible, setStatsVisible] = useLocalStorageState<boolean>('pixelate-statsVisible', true);
+  const [mappingEditorVisible, setMappingEditorVisible] = useState(false);
   const [maxPixels, setMaxPixels] = useLocalStorageState<number>('pixelate-maxPixels', 52);
   const [colorCount, setColorCount] = useLocalStorageState<number>('pixelate-colorCount', 16);
   const [previewUrl, setPreviewUrl] = useLocalStorageState<string | null>('pixelate-previewUrl', null);
@@ -261,6 +263,7 @@ const PixelatePage: React.FC = () => {
   };
 
   // Effect to update stats when layers change (since history restores layers)
+  // 依赖含 availableMaterials：物料列表异步加载完成后也需重算，否则 code 会 fallback 成纯数字
   useEffect(() => {
     if (pixels.length > 0 && statsVisible) {
       try {
@@ -268,7 +271,7 @@ const PixelatePage: React.FC = () => {
         setStats(recomputed);
       } catch (e) { }
     }
-  }, [pixels]);
+  }, [pixels, availableMaterials]);
 
   const [showSaveDialog, setShowSaveDialog] = useState<boolean>(false);
   const [saveDrawingName, setSaveDrawingName] = useState<string>('');
@@ -280,6 +283,51 @@ const PixelatePage: React.FC = () => {
   const [exportFormat, setExportFormat] = useLocalStorageState<'png' | 'jpeg'>('pixelate-exportFormat', 'jpeg');
   const [exportQuality, setExportQuality] = useLocalStorageState<number>('pixelate-exportQuality', 0.85);
   const [exportMinCellSize, setExportMinCellSize] = useLocalStorageState<number>('pixelate-exportMinCellSize', 36); // recommended default: 24 (increased from 24 to 36 for 1.5x resolution)
+  // 背板尺寸（拼豆底板）：0 表示使用“自适应裁剪”（保留旧行为）；> 0 表示把图按 boardSize×boardSize 居中放置
+  const [boardSize, setBoardSize] = useLocalStorageState<number>('pixelate-boardSize', 0);
+  // 自适应模式下的边距模式：'margin' = 内容四周留 1 格空白边（默认）；'none' = 内容贴边无留白
+  // 仅自适应模式生效；背板模式下内容由背板尺寸 + 居中决定，与此选项无关
+  const [marginMode, setMarginMode] = useLocalStorageState<'margin' | 'none'>('pixelate-marginMode', 'margin');
+  // 每格细线开关：开启时每个格子都有淡而细的边线，方便数格子
+  const [cellGridLines, setCellGridLines] = useLocalStorageState<boolean>('pixelate-cellGridLines', true);
+  // 背板标尺线开关：开启时绘制每 10 格粗实线 + 每 5 格粗虚线
+  const [boardRulerEnabled, setBoardRulerEnabled] = useLocalStorageState<boolean>('pixelate-boardRulerEnabled', true);
+  // 空白格棋盘格开关：开启后没有物料的格子用 PS 透明棋盘格样式（灰白交替）表示
+  const [transparentEmpty, setTransparentEmpty] = useLocalStorageState<boolean>('pixelate-transparentEmpty', false);
+  // 水平镜像开关：导出/保存到档案时左右翻转像素内容（坐标标尺、网格框架不翻转）
+  const [mirrorExport, setMirrorExport] = useLocalStorageState<boolean>('pixelate-mirrorExport', false);
+  // 仅导出到本地时：是否同步下载 .pindou 项目文件
+  const [syncPindouOnExport, setSyncPindouOnExport] = useState<boolean>(false);
+
+  // 计算当前像素内容“自动裁剪 + 1 格边距”后的尺寸，用于保存对话框校验背板能否放下
+  // 与 generateSampleImageBlob 内部的裁剪逻辑保持一致
+  const { contentRows: contentRowsForSave, contentCols: contentColsForSave } = useMemo(() => {
+    if (!pixels || pixels.length === 0) return { contentRows: 0, contentCols: 0 };
+    const totalRows = pixels.length;
+    const totalCols = pixels[0]?.length || 0;
+    let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
+    for (let r = 0; r < totalRows; r++) {
+      for (let c = 0; c < totalCols; c++) {
+        if (pixels[r]?.[c]?.hex) {
+          if (r < minR) minR = r;
+          if (r > maxR) maxR = r;
+          if (c < minC) minC = c;
+          if (c > maxC) maxC = c;
+        }
+      }
+    }
+    if (maxR < 0) return { contentRows: 0, contentCols: 0 };
+    const cropMinR = Math.max(0, minR - 1);
+    const cropMaxR = Math.min(totalRows - 1, maxR + 1);
+    const cropMinC = Math.max(0, minC - 1);
+    const cropMaxC = Math.min(totalCols - 1, maxC + 1);
+    return {
+      contentRows: cropMaxR - cropMinR + 1,
+      contentCols: cropMaxC - cropMinC + 1,
+    };
+  }, [pixels]);
+  // 背板尺寸不足，无法放下当前内容时禁止保存
+  const boardSizeInvalid = boardSize > 0 && (boardSize < contentColsForSave || boardSize < contentRowsForSave);
 
   // clear highlighted product when tool is switched away from 'hand'
   useEffect(() => {
@@ -458,6 +506,11 @@ const PixelatePage: React.FC = () => {
       setStats(res.data.stats || []);
       setHighlightedProductId(null);
       setStatsVisible(true);
+
+      // 像素化成功后自动弹出映射编辑，让用户修正自动映射的结果
+      if (newPixels.length > 0 && (res.data.stats || []).length > 0) {
+        setMappingEditorVisible(true);
+      }
 
       // 清除之前图片的修改记录（新图片上传时）
       setDeletionMask(new Map());
@@ -805,15 +858,14 @@ const PixelatePage: React.FC = () => {
     }
     if (selectionState.selectedCells.size === 0) return;
 
-    // determine bounds of selection
+    // 虚拟坐标 → 数组索引：arrayRow = virtualRow - gridOffset.row
+    // 先算选区在数组坐标中的边界（与 handleDeleteSelection 一致）
     let minR = Infinity, maxR = -Infinity;
     let minC = Infinity, maxC = -Infinity;
-
     selectionState.selectedCells.forEach(k => {
-      const parts = k.split(',');
-      if (parts.length !== 2) return;
-      const r = parseInt(parts[0], 10);
-      const c = parseInt(parts[1], 10);
+      const [rs, cs] = k.split(',');
+      const r = parseInt(rs, 10) - gridOffset.row;
+      const c = parseInt(cs, 10) - gridOffset.col;
       if (!Number.isNaN(r) && !Number.isNaN(c)) {
         if (r < minR) minR = r;
         if (r > maxR) maxR = r;
@@ -821,107 +873,43 @@ const PixelatePage: React.FC = () => {
         if (c > maxC) maxC = c;
       }
     });
-
-    // Valid range check
     if (minR === Infinity) return;
 
-    // Current grid bounds
-    const curRows = activeLayerPixels.length;
-    const curCols = activeLayerPixels[0]?.length || 0;
+    // 确保像素矩阵覆盖选区边界（自动扩展 + 计算 shiftR/shiftC）
+    const expandResult = expandPixelsToInclude(activeLayerPixels, maxR, maxC, Math.min(minR, 0), Math.min(minC, 0));
+    const ensured = expandResult.pixels;
+    const shiftR = expandResult.shiftR;
+    const shiftC = expandResult.shiftC;
 
-    // Calculate required expansion
-    // We want to cover [Math.min(0, minR), Math.max(curRows-1, maxR)]
-    const startR = Math.min(0, minR);
-    const endR = Math.max(curRows - 1, maxR);
-    const startC = Math.min(0, minC);
-    const endC = Math.max(curCols - 1, maxC);
+    const newColorOverrides = new Map(colorOverrides);
+    const newDeletionMask = new Map(deletionMask);
 
-    // New dimensions
-    const newRows = endR - startR + 1;
-    const newCols = endC - startC + 1;
-
-    // Offsets to shift old pixels (0,0) to new position
-    const offsetR = -startR; // e.g. if minR is -1, offsetR is 1
-    const offsetC = -startC;
-
-    // Initialize new grid
-    const newPixels: PixelCell[][] = [];
-    for (let r = 0; r < newRows; r++) {
-      const rowArr: PixelCell[] = [];
-      for (let c = 0; c < newCols; c++) {
-        rowArr.push({ hex: null, productId: null });
-      }
-      newPixels.push(rowArr);
-    }
-
-    // Copy existing pixels to new positions
-    for (let r = 0; r < curRows; r++) {
-      for (let c = 0; c < curCols; c++) {
-        if (activeLayerPixels[r] && activeLayerPixels[r][c]) {
-          newPixels[r + offsetR][c + offsetC] = { ...activeLayerPixels[r][c] };
-        }
-      }
-    }
-
-    // Apply Fill for selected cells (using new coordinates)
-    // Also update masks/overrides with offsets if needed
-
-    const newColorOverrides = new Map<string, { hex: string; productId?: number | null }>();
-    const newDeletionMask = new Map<string, boolean>();
-
-    // If grid shifted, migrate old masks/overrides
-    if (offsetR > 0 || offsetC > 0) {
-      Array.from(colorOverrides.entries()).forEach(([k, v]) => {
-        const parts = k.split(',');
-        const r = parseInt(parts[0], 10);
-        const c = parseInt(parts[1], 10);
-        if (!isNaN(r) && !isNaN(c)) {
-          newColorOverrides.set(`${r + offsetR},${c + offsetC}`, v);
-        }
-      });
-      Array.from(deletionMask.entries()).forEach(([k, v]) => {
-        const parts = k.split(',');
-        const r = parseInt(parts[0], 10);
-        const c = parseInt(parts[1], 10);
-        if (!isNaN(r) && !isNaN(c)) {
-          newDeletionMask.set(`${r + offsetR},${c + offsetC}`, v);
-        }
-      });
-    } else {
-      // no shift, just copy
-      colorOverrides.forEach((v, k) => newColorOverrides.set(k, v));
-      deletionMask.forEach((v, k) => newDeletionMask.set(k, v));
-    }
-
-    // Fill logic
+    // 填充选区（虚拟坐标 → 扩展后数组索引）
     selectionState.selectedCells.forEach(cellKey => {
-      const parts = cellKey.split(',');
-      const r = parseInt(parts[0], 10);
-      const c = parseInt(parts[1], 10);
+      const [rowStr, colStr] = cellKey.split(',');
+      const row = parseInt(rowStr, 10);
+      const col = parseInt(colStr, 10);
+      const eRow = row - gridOffset.row + shiftR;
+      const eCol = col - gridOffset.col + shiftC;
+      if (!Number.isNaN(row) && !Number.isNaN(col) && ensured[eRow] && typeof ensured[eRow][eCol] !== 'undefined') {
+        ensured[eRow][eCol].hex = color;
+        ensured[eRow][eCol].productId = typeof productId === 'number' ? productId : null;
 
-      if (!Number.isNaN(r) && !Number.isNaN(c)) {
-        // map original selection coord to new grid coord
-        const tr = r + offsetR;
-        const tc = c + offsetC;
-
-        if (tr >= 0 && tr < newRows && tc >= 0 && tc < newCols) {
-          newPixels[tr][tc].hex = color;
-          newPixels[tr][tc].productId = typeof productId === 'number' ? productId : null;
-
-          const newKey = `${tr},${tc}`;
-          newColorOverrides.set(newKey, {
-            hex: color,
-            productId: typeof productId === 'number' ? productId : null
-          });
-          // remove deletion mask if filling
-          newDeletionMask.delete(newKey);
-        }
+        // colorOverrides/deletionMask 的 key 用虚拟坐标（与 handleDeleteSelection 一致）
+        newColorOverrides.set(cellKey, {
+          hex: color,
+          productId: typeof productId === 'number' ? productId : null
+        });
+        newDeletionMask.delete(cellKey);
       }
     });
 
     saveToHistory();
 
-    setPixels(newPixels, offsetR, offsetC);
+    setPixels(ensured, shiftR, shiftC);
+    if (shiftR !== 0 || shiftC !== 0) {
+      setGridOffset(prev => ({ row: prev.row - shiftR, col: prev.col - shiftC }));
+    }
     setColorOverrides(newColorOverrides);
     setDeletionMask(newDeletionMask);
 
@@ -1288,6 +1276,27 @@ const PixelatePage: React.FC = () => {
     return out;
   };
 
+  // 应用映射编辑：把 pixels 里指定 productId/hex 的格子批量换成新物料
+  const handleApplyMapping = (changes: Map<number | string, MappingChange>) => {
+    if (changes.size === 0) { setMappingEditorVisible(false); return; }
+    setLayers((prev) => prev.map((layer) => {
+      if (layer.id !== activeLayerId) return layer;
+      const newPixels = layer.pixels.map((row) =>
+        row.map((cell) => {
+          if (!cell || !cell.hex) return cell;
+          // 按 productId 或 hex 查找是否在修改列表里
+          const key = typeof cell.productId === 'number' ? cell.productId : cell.hex.toLowerCase();
+          const change = changes.get(key);
+          if (change) return { hex: change.hex, productId: change.productId };
+          return cell;
+        })
+      );
+      return { ...layer, pixels: newPixels };
+    }));
+    // stats 重算由已有的 pixels 变化 effect 自动触发
+    setMappingEditorVisible(false);
+  };
+
   // expand pixels matrix so that it includes at least up to maxRow/maxCol (no negative handling)
   const expandPixelsToInclude = (pxs: PixelCell[][], maxRow: number, maxCol: number, minRow: number = 0, minCol: number = 0): { pixels: PixelCell[][], shiftR: number, shiftC: number } => {
     const oldRows = pxs.length;
@@ -1406,68 +1415,17 @@ const PixelatePage: React.FC = () => {
   // compute preview pixels if picker open and preview color selected
   const computePreviewPixels = () => {
     if (!showFillPicker || !previewFillColor || selectionState.selectedCells.size === 0) return pixels;
-    // determine bounds and expand preview matrix as needed
-    let minR = Infinity, maxR = -Infinity;
-    let minC = Infinity, maxC = -Infinity;
-    selectionState.selectedCells.forEach(k => {
-      const parts = k.split(',');
-      if (parts.length !== 2) return;
-      const r = parseInt(parts[0], 10);
-      const c = parseInt(parts[1], 10);
-      if (!Number.isNaN(r) && !Number.isNaN(c)) {
-        if (r < minR) minR = r;
-        if (r > maxR) maxR = r;
-        if (c < minC) minC = c;
-        if (c > maxC) maxC = c;
-      }
-    });
-
-    // check if valid
-    if (minR === Infinity) return pixels;
-
-    const curRows = pixels.length;
-    const curCols = pixels[0]?.length || 0;
-
-    const startR = Math.min(0, minR);
-    const endR = Math.max(curRows - 1, maxR);
-    const startC = Math.min(0, minC);
-    const endC = Math.max(curCols - 1, maxC);
-
-    const newRows = endR - startR + 1;
-    const newCols = endC - startC + 1;
-    const offsetR = -startR;
-    const offsetC = -startC;
-
-    const newPixels: PixelCell[][] = [];
-    for (let r = 0; r < newRows; r++) {
-      const rowArr: PixelCell[] = [];
-      for (let c = 0; c < newCols; c++) {
-        rowArr.push({ hex: null, productId: null });
-      }
-      newPixels.push(rowArr);
-    }
-    for (let r = 0; r < curRows; r++) {
-      for (let c = 0; c < curCols; c++) {
-        if (pixels[r] && pixels[r][c]) {
-          newPixels[r + offsetR][c + offsetC] = { ...pixels[r][c] };
-        }
-      }
-    }
-
+    // 预览只做临时覆盖，不扩展网格。虚拟坐标 → 数组索引：减去 gridOffset。
+    const newPixels = pixels.map(row => row.map(cell => ({ ...cell })));
     selectionState.selectedCells.forEach(cellKey => {
-      const parts = cellKey.split(',');
-      const r = parseInt(parts[0], 10);
-      const c = parseInt(parts[1], 10);
-      if (!Number.isNaN(r) && !Number.isNaN(c)) {
-        const tr = r + offsetR;
-        const tc = c + offsetC;
-        if (tr >= 0 && tr < newRows && tc >= 0 && tc < newCols) {
-          newPixels[tr][tc].hex = previewFillColor;
-          newPixels[tr][tc].productId = previewFillProductId;
-        }
+      const [rs, cs] = cellKey.split(',');
+      const r = parseInt(rs, 10) - gridOffset.row;
+      const c = parseInt(cs, 10) - gridOffset.col;
+      if (!Number.isNaN(r) && !Number.isNaN(c) && newPixels[r] && typeof newPixels[r][c] !== 'undefined') {
+        newPixels[r][c].hex = previewFillColor;
+        newPixels[r][c].productId = previewFillProductId;
       }
     });
-
     return newPixels;
   };
   const displayedPixels = computePreviewPixels();
@@ -1488,11 +1446,23 @@ const PixelatePage: React.FC = () => {
 
   // generate sample image blob: top = pixelated preview (with grid & axis), bottom = swatches with code and count
   // options: format = 'png' | 'jpeg', quality for jpeg, minCellSize ensures resolution not too low
+  //   boardSize: 0 = 自适应裁剪（旧行为）；> 0 = 把内容居中放在 boardSize×boardSize 的背板上
   const generateSampleImageBlob = async (
     pxs: PixelCell[][],
     statsList: any[],
     materials: any[] = [],
-    options?: { format?: 'png' | 'jpeg'; quality?: number; minCellSize?: number; maxWidth?: number }
+    options?: {
+      format?: 'png' | 'jpeg';
+      quality?: number;
+      minCellSize?: number;
+      maxWidth?: number;
+      boardSize?: number;
+      marginMode?: 'margin' | 'none';      // 自适应模式下的边距：'margin' = 留 1 格边（默认），'none' = 无边
+      cellGridLines?: boolean;              // 每格细线开关
+      boardRulerEnabled?: boolean;          // 背板标尺线（10 格实线 + 5 格虚线）开关
+      transparentEmpty?: boolean;           // 空白格用 PS 棋盘格样式表示
+      mirror?: boolean;                     // 水平镜像：导出时左右翻转像素内容（坐标/网格框架不动）
+    }
   ): Promise<Blob | null> => {
     try {
       const totalCols = pxs[0]?.length || 0;
@@ -1514,14 +1484,41 @@ const PixelatePage: React.FC = () => {
       // If no colored pixels, return null
       if (maxR < 0) return null;
 
-      // Add 1-cell margin around the content
-      const cropMinR = Math.max(0, minR - 1);
-      const cropMaxR = Math.min(totalRows - 1, maxR + 1);
-      const cropMinC = Math.max(0, minC - 1);
-      const cropMaxC = Math.min(totalCols - 1, maxC + 1);
+      // 边距模式（仅自适应模式生效）：
+      // - 'margin'：内容四周留 1 格空白边（视觉上让图与背板边界有缓冲，符合拼豆图纸习惯）
+      // - 'none'：内容贴边，无任何留白
+      // 注意：旧代码用 Math.max(0, minR-1) 在"原画布坐标系"加边距，当内容贴在原画布边缘时
+      //       边距会被截断为 0，导致"有的图有边、有的图没边"的不一致现象。
+      //       现在改为"先裁出纯内容，再在纯内容四周统一加 1 格空白"，行为可预测且四边对称。
+      const marginOpt = options?.marginMode === 'none' ? 'none' : 'margin';
+      const wantMargin = marginOpt === 'margin';
+      // 纯内容边界（不含边距）
+      const pureContentRows = maxR - minR + 1;
+      const pureContentCols = maxC - minC + 1;
+      // 最终内容尺寸 = 纯内容 + 边距（margin 模式下四周各 1 格）
+      const contentRows = wantMargin ? pureContentRows + 2 : pureContentRows;
+      const contentCols = wantMargin ? pureContentCols + 2 : pureContentCols;
+      // cropMinR/C 仍是"在 pxs 原始数组中的取数起点"（纯内容左上角）
+      // 边距通过下方 boardOffsetRow/Col 类似机制实现：自适应模式下也引入 contentOffset
+      const cropMinR = minR;
+      const cropMaxR = maxR;
+      const cropMinC = minC;
+      const cropMaxC = maxC;
 
-      const rows = cropMaxR - cropMinR + 1;
-      const cols = cropMaxC - cropMinC + 1;
+      // 背板模式：boardSize > 0 时使用 boardSize×boardSize 作为画布尺寸，并把内容居中
+      const boardOpt = typeof options?.boardSize === 'number' ? options.boardSize : 0;
+      const useBoard = boardOpt > 0;
+      const rows = useBoard ? boardOpt : contentRows;
+      const cols = useBoard ? boardOpt : contentCols;
+      // 内容在最终画布中的左上角偏移（行/列）：
+      // - 背板模式：按 (boardSize - contentSize) / 2 居中（contentSize 已含边距）
+      // - 自适应 + margin 模式：偏移 = 1（在纯内容四周留 1 格空白边）
+      // - 自适应 + none 模式：偏移 = 0（内容贴边）
+      const contentOffsetRow = useBoard ? Math.floor((boardOpt - contentRows) / 2) : (wantMargin ? 1 : 0);
+      const contentOffsetCol = useBoard ? Math.floor((boardOpt - contentCols) / 2) : (wantMargin ? 1 : 0);
+      // 兼容旧变量名（下方像素绘制 / 标尺坐标转换仍用 boardOffsetRow/Col 命名）
+      const boardOffsetRow = contentOffsetRow;
+      const boardOffsetCol = contentOffsetCol;
 
       const padding = 12;
       const format = options?.format || exportFormat || 'jpeg';
@@ -1529,10 +1526,16 @@ const PixelatePage: React.FC = () => {
       const minCellSize = options?.minCellSize || exportMinCellSize || 24;
       const maxWidth = options?.maxWidth || 2400;
 
-      // determine cellSize
-      let cellSize = Math.max(1, Math.floor(Math.min(maxWidth / Math.max(1, cols), Math.max(minCellSize, Math.floor((cols > 0 ? Math.ceil(800 / Math.max(1, cols)) : minCellSize))))));
-      cellSize = Math.max(minCellSize, cellSize);
-      const topWidth = Math.min(maxWidth, cols * cellSize);
+      // determine cellSize —— 必须保证 cols * cellSize <= maxWidth，否则会被画布裁剪（X 轴截断 bug 的根因）
+      // 旧行为会把 cellSize 强行抬高到 minCellSize，导致 100 列时总宽超过 maxWidth 被截断。
+      // 新行为：先用 maxWidth / cols 限制 cellSize 上限，再用 minCellSize 限制下限（仅在列数较少时生效）。
+      const cellFromMaxWidth = Math.max(1, Math.floor(maxWidth / Math.max(1, cols)));
+      const cellFromMinAuto = cols > 0 ? Math.ceil(800 / Math.max(1, cols)) : minCellSize;
+      // 小图（列数少）时希望保持 minCellSize 清晰度；大图（列数多）时以 maxWidth 为硬上限
+      let cellSize = Math.max(1, Math.min(cellFromMaxWidth, Math.max(minCellSize, cellFromMinAuto)));
+      cellSize = Math.max(1, cellSize);
+      // 注意：不再用 Math.min(maxWidth, cols * cellSize) 截断 topWidth，否则画布宽度 < 实际绘制宽度会造成右侧裁剪
+      const topWidth = cols * cellSize;
       const topHeight = rows * cellSize;
 
       // header for axis labels (virtual coordinates)
@@ -1567,33 +1570,24 @@ const PixelatePage: React.FC = () => {
       }
 
       // estimate canvas width (grid area + headers + padding)
-      const canvasWidth = headerW + topWidth + padding * 2;
-      // available width for bottom items (excluding left header area)
-      const availableWidth = canvasWidth - padding * 2 - headerW;
+      // 左侧 headerW（行号标尺）+ 内容 topWidth + 右侧 headerW（行号标尺，方便大图拖到右下角时读坐标）
+      const canvasWidth = headerW + topWidth + headerW + padding * 2;
+      // available width for bottom items (excluding left+right header area)
+      const availableWidth = canvasWidth - padding * 2 - headerW * 2;
 
-      // layout items into rows using measured widths
-      let rowsNeeded = 0;
-      let curX = 0;
-      for (let i = 0; i < measuredWidths.length; i++) {
-        const blockW = measuredWidths[i] + gap * 2;
-        if (curX === 0) {
-          // start of a new row
-          curX = blockW;
-          rowsNeeded++;
-        } else if (curX + blockW <= availableWidth) {
-          curX += blockW;
-        } else {
-          // wrap to next row
-          curX = blockW;
-          rowsNeeded++;
-        }
-      }
-
-      const bottomRows = Math.max(1, rowsNeeded);
+      // === 列网格布局：所有列等宽，上下行严格对齐，避免流式布局的不对齐问题 ===
+      // 取最宽的 block 作为统一列宽，保证每个 item 都能完整放入一个格子
+      const maxBlockW = measuredWidths.length > 0 ? Math.max(...measuredWidths) + gap * 2 : 0;
+      // 列数：至少 1 列；当列宽较大时也不要少于一定数量以利用横向空间
+      const numCols = maxBlockW > 0 ? Math.max(1, Math.floor(availableWidth / maxBlockW)) : 1;
+      // 真正的统一列宽：把可用宽度均匀分给各列（≥ maxBlockW，确保不溢出）
+      const colWidth = numCols > 0 ? Math.floor(availableWidth / numCols) : availableWidth;
+      const bottomRows = numCols > 0 ? Math.ceil(sorted.length / numCols) : 1;
       const bottomHeight = bottomRows * lineHeight + padding * 2;
 
       const totalWidth = canvasWidth;
-      const totalHeight = padding + headerH + topHeight + padding + bottomHeight;
+      // 顶部 headerH（列号标尺）+ 内容 topHeight + 底部 headerH（列号标尺，方便大图拖到右下角时读坐标）+ 物料区
+      const totalHeight = padding + headerH + topHeight + headerH + padding + bottomHeight;
 
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.floor(totalWidth));
@@ -1637,11 +1631,57 @@ const PixelatePage: React.FC = () => {
       ctx.fillStyle = '#f9fafb';
       ctx.fillRect(contentOriginX, contentOriginY, topWidth, topHeight);
 
-      // draw pixel cells (only cropped region)
+      // 空白格棋盘格开关：开启后没有物料的格子用 PS 透明棋盘格样式（灰白交替）表示
+      // PS 透明棋盘格的经典配色：浅灰 #e5e5e5 + 中灰 #bfbfbf（或更接近原版的 #d4d4d4 / #999）
+      // 这里采用 #d8d8d8 / #a8a8a8，对比清晰但不刺眼，不与物料颜色混淆
+      const transparentEmptyEnabled = options?.transparentEmpty === true;
+      // 水平镜像：开启后画布列 c 对应的源列左右翻转（坐标标尺/网格线框架不变）
+      const mirrorEnabled = options?.mirror === true;
+      const mapOrigCol = (c: number): number => {
+        const mc = mirrorEnabled ? cols - 1 - c : c;
+        return mc - boardOffsetCol + cropMinC;
+      };
+
+      // 预先绘制棋盘格（只在 transparentEmptyEnabled 时生效）。
+      // 思路：先把整个网格区域画成棋盘格，然后在上面的像素绘制循环里用物料颜色覆盖有物料的格子。
+      // 棋盘格按画布坐标 (r,c) 连续分布，让相邻空格的图案无缝衔接，视觉上像一整块透明背景。
+      if (transparentEmptyEnabled) {
+        const light = '#e5e5e5'; // 棋盘格浅色
+        const dark = '#b0b0b0';  // 棋盘格深色
+        // 子格大小：每格内分 2×2 个棋盘子格，所以 subSize = cellSize / 2（保证至少 1px）
+        const subSize = Math.max(1, Math.floor(cellSize / 2));
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const origR = r - boardOffsetRow + cropMinR;
+            const origC = mapOrigCol(c);
+            const cell = pxs[origR]?.[origC];
+            // 有物料的格子稍后用物料色覆盖，这里跳过以省绘制（也可全画再覆盖，等价但更慢）
+            if (cell && cell.hex) continue;
+            const x0 = contentOriginX + c * cellSize;
+            const y0 = contentOriginY + r * cellSize;
+            // 2×2 棋盘格，按画布 (r,c) 奇偶决定起始色，让相邻格子图案连续
+            const baseLight = (r + c) % 2 === 0;
+            ctx.fillStyle = baseLight ? light : dark;
+            ctx.fillRect(x0, y0, subSize, subSize);
+            ctx.fillStyle = baseLight ? dark : light;
+            ctx.fillRect(x0 + subSize, y0, subSize, subSize);
+            ctx.fillStyle = baseLight ? dark : light;
+            ctx.fillRect(x0, y0 + subSize, subSize, subSize);
+            ctx.fillStyle = baseLight ? light : dark;
+            ctx.fillRect(x0 + subSize, y0 + subSize, subSize, subSize);
+          }
+        }
+      }
+
+      // draw pixel cells
+      // 画布坐标 (r, c) → pxs 数组坐标：统一公式 origR = r - boardOffsetRow + cropMinR
+      //   - 背板模式：boardOffsetRow 为居中偏移，超出内容范围的格子为空白背板
+      //   - 自适应 margin 模式：boardOffsetRow = 1，第 0 行/列是边距（空白），第 1 行起才是内容
+      //   - 自适应 none 模式：boardOffsetRow = 0，画布第 0 行直接对应 pxs[cropMinR]
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
-          const origR = r + cropMinR;
-          const origC = c + cropMinC;
+          const origR = r - boardOffsetRow + cropMinR;
+          const origC = mapOrigCol(c);
           const cell = pxs[origR]?.[origC];
           if (!cell || !cell.hex) continue;
           ctx.fillStyle = cell.hex;
@@ -1655,7 +1695,7 @@ const PixelatePage: React.FC = () => {
             ctx.fillStyle = textColor;
             // 根据cellSize调整字体大小，确保文字不会太大
             const fontSize = Math.min(cellSize * 0.6, Math.max(8, cellSize * 0.4));
-            ctx.font = `bold ${fontSize}px monospace`;
+            ctx.font = `bold ${fontSize}px "Microsoft YaHei", "微软雅黑", sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             // 在单元格中心绘制文字
@@ -1667,49 +1707,173 @@ const PixelatePage: React.FC = () => {
         }
       }
 
-      // thin grid lines
-      ctx.lineWidth = Math.max(0.5, 0.5);
-      ctx.strokeStyle = 'rgba(0,0,0,0.06)';
-      for (let r = 0; r <= rows; r++) {
-        const y = contentOriginY + r * cellSize;
-        ctx.beginPath();
-        ctx.moveTo(contentOriginX, y);
-        ctx.lineTo(contentOriginX + cols * cellSize, y);
-        ctx.stroke();
-      }
-      for (let c = 0; c <= cols; c++) {
-        const x = contentOriginX + c * cellSize;
-        ctx.beginPath();
-        ctx.moveTo(x, contentOriginY);
-        ctx.lineTo(x, contentOriginY + rows * cellSize);
-        ctx.stroke();
+      // === 标尺（绘制在像素格之上）===
+      // 设计：
+      // - 每格细线（可选）：每个格子都画一条淡而细的边线，方便数格子
+      // - 每 10 格一根粗实线（背板/区块边界，可选）
+      // - 每 5 格一根粗虚线（中间刻度，不含 10 的倍数位置，避免与实线重叠，可选）
+      // - 标尺线统一使用全黑（在彩色像素上对比度最高，视觉效果最佳）
+      // 标尺开关
+      const cellGridEnabled = options?.cellGridLines !== false;   // 默认开启
+      const boardRulerEnabled = options?.boardRulerEnabled !== false; // 默认开启
+      // 全黑模式：所有标尺线统一用黑色（无需按底色判断）
+      const lineColorForH = (_c1: number, _c2: number, _r: number): string => '#000000';
+      const lineColorForV = (_r1: number, _r2: number, _c: number): string => '#000000';
+
+      // === 网格线位置计算 ===
+      // symmetric=true（标准背板 52/78/104/120 等）：非 10 倍数时把余数平分为两侧边距，
+      //   让网格区间在尺寸内对称分布（上下/左右间距相等）。
+      //   - 50 格（10 倍数）：位置 0,10,...,50
+      //   - 52 格：margin=1，位置 0,1,11,21,31,41,51,52（左右各 1 格边距）
+      //   - 78 格：margin=4，位置 0,4,14,...,74,78
+      //   - 104 格：margin=2，位置 0,2,12,...,102,104
+      //   - 120 格：10 倍数，位置 0,10,...,120
+      // symmetric=false（自适应裁剪）：从左上角顶格开始计数，每 10 格一条线，末端补 size。
+      //   不做对称处理，符合"自适应 = 内容紧贴左上角"的直觉。
+      const calcRulerLines = (size: number, symmetric: boolean): number[] => {
+        const remainder = size % 10;
+        // 10 的倍数、或小图、或非对称模式：从 0 顶格开始，每 10 格一条，末端兜底补 size
+        if (remainder === 0 || size < 10 || !symmetric) {
+          const pos: number[] = [];
+          for (let i = 0; i <= size; i += 10) pos.push(i);
+          if (pos[pos.length - 1] !== size) pos.push(size);
+          return pos;
+        }
+        // 标准背板 + 非 10 倍数：余数平分为两侧边距
+        const margin = Math.floor(remainder / 2);
+        const pos: number[] = [0]; // 左/上外框
+        for (let p = margin; p <= size - margin; p += 10) {
+          if (p !== 0 && p !== size) pos.push(p);
+        }
+        pos.push(size); // 右/下外框
+        return Array.from(new Set(pos)).sort((a, b) => a - b);
+      };
+      // 虚线位置策略（与实线配套）：
+      // - 标准背板（对称模式）：实线因余数平分边距而整体偏移（如 104 格实线在 2,12,22,...），
+      //   此时虚线必须落在"相邻两条实线的正中间"，否则会紧贴实线造成视觉错乱
+      //   （如旧版 104 格实线在 2，虚线却固定在 5，距离 2 只有 3 格，看起来像从实线开始）。
+      //   规则：取每个 ≥6 格区间的整数中点；半格中点（奇数区间）和小边距区间不画。
+      // - 自适应（顶格模式）：实线固定在 0,10,20,...，虚线固定在 5 的倍数即可，顶格对齐。
+      // 两种模式虚线都落在整数格边界，绝不会出现在格子中间（如 43.5）。
+      const calcDashedLines = (solid: number[], size: number, symmetric: boolean): number[] => {
+        const dashed: number[] = [];
+        if (!symmetric) {
+          // 自适应：5 的倍数（非实线位置）
+          const solidSet = new Set(solid.map((s) => Math.round(s)));
+          for (let p = 5; p < size; p += 10) {
+            if (!solidSet.has(p)) dashed.push(p);
+          }
+        } else {
+          // 标准背板：相邻实线的整数中点（区间 ≥6 格才画，避免边距小区间）
+          for (let i = 0; i < solid.length - 1; i++) {
+            const a = solid[i];
+            const b = solid[i + 1];
+            if (b - a < 6) continue;
+            const mid = (a + b) / 2;
+            if (Number.isInteger(mid) && mid > 0 && mid < size) dashed.push(mid);
+          }
+        }
+        return dashed;
+      };
+      // 标准背板模式用对称分布；自适应模式顶格开始（含留边情况，留边只是整体平移，不影响计数起点）
+      const solidRows = calcRulerLines(rows, useBoard);
+      const solidCols = calcRulerLines(cols, useBoard);
+      const dashedRows = calcDashedLines(solidRows, rows, useBoard);
+      const dashedCols = calcDashedLines(solidCols, cols, useBoard);
+
+      // 每格细线（方便数格子）：每个格子都画一条细而淡的边线
+      // 颜色同样按底色自适应（auto）或全黑（black），但线宽更细、不透明度更低，避免喧宾夺主
+      if (cellGridEnabled) {
+        ctx.save();
+        ctx.lineWidth = Math.max(0.5, cellSize * 0.02);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.35;
+        // 水平细线（含外框，r=0..rows）
+        for (let r = 0; r <= rows; r++) {
+          const y = contentOriginY + r * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForH(0, cols, r);
+          ctx.moveTo(contentOriginX, y);
+          ctx.lineTo(contentOriginX + cols * cellSize, y);
+          ctx.stroke();
+        }
+        // 垂直细线
+        for (let c = 0; c <= cols; c++) {
+          const x = contentOriginX + c * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForV(0, rows, c);
+          ctx.moveTo(x, contentOriginY);
+          ctx.lineTo(x, contentOriginY + rows * cellSize);
+          ctx.stroke();
+        }
+        ctx.restore();
       }
 
-      // major grid lines every 10
-      ctx.lineWidth = Math.max(1, 1);
-      ctx.strokeStyle = 'rgba(0,0,0,0.28)';
-      for (let r = 0; r <= rows; r += 10) {
-        const y = contentOriginY + r * cellSize;
-        ctx.beginPath();
-        ctx.moveTo(contentOriginX, y);
-        ctx.lineTo(contentOriginX + cols * cellSize, y);
-        ctx.stroke();
-      }
-      for (let c = 0; c <= cols; c += 10) {
-        const x = contentOriginX + c * cellSize;
-        ctx.beginPath();
-        ctx.moveTo(x, contentOriginY);
-        ctx.lineTo(x, contentOriginY + rows * cellSize);
-        ctx.stroke();
-      }
+      // 背板标尺线（每 5 格虚线 + 每 10 格实线），可通过 boardRulerEnabled 关闭
+      // 虚线/实线位置使用对称居中分布（calcRulerLines/calcDashedLines），
+      // 让非 10 倍数背板（52/78/104/120 等）的网格线左右上下间距相等。
+      if (boardRulerEnabled) {
+        // 虚线（相邻实线的中点）
+        ctx.save();
+        ctx.lineWidth = Math.max(1.5, cellSize * 0.06);
+        ctx.setLineDash([Math.max(4, cellSize * 0.25), Math.max(3, cellSize * 0.18)]);
+        ctx.lineCap = 'butt';
+        // 水平虚线
+        for (const r of dashedRows) {
+          const y = contentOriginY + r * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForH(0, cols, Math.round(r));
+          ctx.moveTo(contentOriginX, y);
+          ctx.lineTo(contentOriginX + cols * cellSize, y);
+          ctx.stroke();
+        }
+        // 垂直虚线
+        for (const c of dashedCols) {
+          const x = contentOriginX + c * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForV(0, rows, Math.round(c));
+          ctx.moveTo(x, contentOriginY);
+          ctx.lineTo(x, contentOriginY + rows * cellSize);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } // end boardRulerEnabled (dashed)
+
+      // 每 10 格粗实线（外框 + 内部分割线，对称居中分布）
+      if (boardRulerEnabled) {
+        ctx.save();
+        ctx.lineWidth = Math.max(2, cellSize * 0.1);
+        ctx.setLineDash([]);
+        // 水平实线（solidRows 已含 0 和 rows，覆盖外框）
+        for (const r of solidRows) {
+          const y = contentOriginY + r * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForH(0, cols, Math.round(r));
+          ctx.moveTo(contentOriginX, y);
+          ctx.lineTo(contentOriginX + cols * cellSize, y);
+          ctx.stroke();
+        }
+        // 垂直实线（solidCols 已含 0 和 cols，覆盖外框）
+        for (const c of solidCols) {
+          const x = contentOriginX + c * cellSize;
+          ctx.beginPath();
+          ctx.strokeStyle = lineColorForV(0, rows, Math.round(c));
+          ctx.moveTo(x, contentOriginY);
+          ctx.lineTo(x, contentOriginY + rows * cellSize);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } // end boardRulerEnabled (solid + outer frame)
 
       // axis labels with virtual coordinates
+      // 行列坐标统一从 1 开始计数（行/列均从 1），不考虑像素化时的 gridOffset 或裁剪起点。
+      // 导出的样图是独立的图纸，应按自身坐标系重新计数，不继承像素化页面的画布偏移。
       const fontSize = Math.max(10, Math.floor(cellSize * 0.45));
       ctx.font = `${fontSize}px sans-serif`;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       for (let c = 0; c < cols; c++) {
-        const virtualCol = (c + cropMinC) + gridOffset.col + 1;
+        const virtualCol = c + 1;
         const text = String(virtualCol);
         const x = contentOriginX + (c * cellSize + cellSize / 2);
         const y = padding + headerH / 2;
@@ -1728,7 +1892,7 @@ const PixelatePage: React.FC = () => {
       }
       ctx.textAlign = 'right';
       for (let r = 0; r < rows; r++) {
-        const virtualRow = (r + cropMinR) + gridOffset.row + 1;
+        const virtualRow = r + 1;
         const text = String(virtualRow);
         const y = contentOriginY + (r * cellSize + cellSize / 2);
         const metrics = ctx.measureText(text);
@@ -1746,44 +1910,101 @@ const PixelatePage: React.FC = () => {
         ctx.fillText(text, rectRight - padX, y);
       }
 
-      // draw separator between top and bottom
-      const sepY = contentOriginY + topHeight + padding / 2;
+      // 右侧行号标尺（对称于左侧，方便大图拖到右下角时读行号）
+      ctx.textAlign = 'left';
+      for (let r = 0; r < rows; r++) {
+        const virtualRow = r + 1;
+        const text = String(virtualRow);
+        const y = contentOriginY + (r * cellSize + cellSize / 2);
+        const metrics = ctx.measureText(text);
+        const textW = metrics.width;
+        const padX = 6;
+        const padY = 4;
+        const rectW = textW + padX * 2;
+        const rectH = fontSize + padY * 2;
+        const rectLeft = padding + headerW + topWidth + 6;
+        const rectX = Math.round(rectLeft);
+        const rectY = Math.round(y - rectH / 2);
+        ctx.fillStyle = 'white';
+        ctx.fillRect(rectX, rectY, rectW, rectH);
+        ctx.fillStyle = 'rgba(55,65,81,0.95)';
+        ctx.fillText(text, rectLeft + padX, y);
+      }
+
+      // 下侧列号标尺（对称于上侧，方便大图拖到右下角时读列号）
+      ctx.textAlign = 'center';
+      const bottomRulerY = padding + headerH + topHeight + headerH / 2;
+      for (let c = 0; c < cols; c++) {
+        const virtualCol = c + 1;
+        const text = String(virtualCol);
+        const x = contentOriginX + (c * cellSize + cellSize / 2);
+        const metrics = ctx.measureText(text);
+        const textW = metrics.width;
+        const padX = 6;
+        const padY = 4;
+        const rectW = textW + padX * 2;
+        const rectH = fontSize + padY * 2;
+        const rectX = Math.round(x - rectW / 2);
+        const rectY = Math.round(bottomRulerY - rectH / 2);
+        ctx.fillStyle = 'white';
+        ctx.fillRect(rectX, rectY, rectW, rectH);
+        ctx.fillStyle = 'rgba(55,65,81,0.95)';
+        ctx.fillText(text, x, bottomRulerY);
+      }
+      // 恢复 textAlign 默认值，避免影响后续绘制
+      ctx.textAlign = 'left';
+
+      // draw separator between top and bottom (位于下标尺下方、物料区上方)
+      const sepY = padding + headerH + topHeight + headerH + padding / 2;
       ctx.fillStyle = '#f3f4f6';
       ctx.fillRect(padding, sepY, canvas.width - padding * 2, 2);
 
-      // draw swatches & stats below
-      // use monospace for swatch text so we can pad counts to fixed width
-      ctx.font = `${Math.max(12, Math.floor(cellSize * 0.9))}px monospace`;
+      // draw swatches & stats below —— 列网格布局，所有列等宽，上下行严格对齐
+      // 微软雅黑粗体，笔画清晰利于 OCR 识别；物料代码与上方图纸保持一致
+      ctx.font = `${Math.max(12, Math.floor(cellSize * 0.9))}px "Microsoft YaHei", "微软雅黑", sans-serif`;
       ctx.textBaseline = 'middle';
       ctx.fillStyle = '#111827';
-      let cursorX = padding;
-      let cursorY = contentOriginY + topHeight + padding + gap;
-      const maxTextW = canvas.width - padding * 2 - gap * 2 - headerW;
-      for (const item of sorted) {
-        // cap count to at most 5 digits; pad left to reserve fixed width
-        let countStr = String(item.count);
-        if (countStr.length > 5) countStr = countStr.slice(0, 5);
-        const paddedCount = countStr.padStart(5, ' ');
-        const text = `${item.code} (${paddedCount})`;
-        const measured = ctx.measureText(text);
-        const textW = Math.min(maxTextW, measured.width);
-        // now we don't draw a separate swatch; text background uses the material color
-        const blockW = textW + gap * 2;
-        if (cursorX + blockW > canvas.width - padding) {
-          cursorX = padding;
-          cursorY += lineHeight;
-        }
+      // 物料区域整体水平居中：让最后一行的右侧空白均匀分布
+      const gridStartX = padding + headerW;
+      const gridTotalW = colWidth * numCols;
+      // 居中偏移（≥ 0），让网格在可用区域内居中
+      const centerOffsetX = Math.max(0, Math.floor((availableWidth - gridTotalW) / 2));
+      const textHeight = Math.max(16, swatchSize * 0.8);
+      // 物料区起点 = 顶部padding + 上列标尺headerH + 内容topHeight + 下列标尺headerH + 分隔padding + gap
+      const startY = padding + headerH + topHeight + headerH + padding + gap;
 
-        // text with colored background (use material color as background)
-        const textX = cursorX + headerW + gap;
-        const textY = cursorY + Math.max(16, swatchSize * 0.8) / 2;
-        const textHeight = Math.max(16, swatchSize * 0.8);
+      for (let i = 0; i < sorted.length; i++) {
+        const item = sorted[i];
+        const text = texts[i];
+        const measured = ctx.measureText(text);
+        // 每个格子内文字最大可用宽度：colWidth 减去左右内边距
+        const cellInnerW = Math.max(0, colWidth - gap * 2);
+        // 限制文字宽度防止溢出（理论上 measured.width ≤ maxBlockW - 2*gap ≤ cellInnerW，这里只是兜底）
+        const textW = Math.min(measured.width, cellInnerW);
+
+        // 该 item 在网格中的行列号
+        const rowIdx = Math.floor(i / numCols);
+        const colIdx = i % numCols;
+        // 该列左上角 x 坐标
+        const cellX = gridStartX + centerOffsetX + colIdx * colWidth;
+        const cellY = startY + rowIdx * lineHeight;
+        // 色块和文字共同的垂直中心 = 整行（lineHeight）的中心
+        // 旧版用 textHeight/2 偏移，当 lineHeight > textHeight 时会让色块挤在行顶部，视觉不居中
+        const centerY = cellY + lineHeight / 2;
+        // 色块上下范围（围绕 centerY 对称）
+        const bgY = centerY - textHeight / 2;
+        // 文字绘制 y：textBaseline='middle' 对中文字体会略偏上（em-box 中心 ≠ 视觉中心）
+        // 加一个小修正（约字体大小的 12%）让文字视觉与色块中心对齐
+        const fontPx = Math.max(12, Math.floor(cellSize * 0.9));
+        const textY = centerY + fontPx * 0.12;
+        // 文字绘制 x：在格子内左对齐，留 gap 内边距
+        const textX = cellX + gap;
 
         // draw colored rounded background for text
         const bgPadding = 6;
         const bgX = textX - bgPadding;
-        const bgY = textY - textHeight / 2;
-        const bgW = textW + bgPadding * 2;
+        // 背景宽度也限制在格子内，防止超出列右边界
+        const bgW = Math.min(textW + bgPadding * 2, colWidth - gap);
         const bgH = textHeight;
         const radius = Math.max(4, Math.min(12, Math.floor(bgH / 4)));
 
@@ -1811,8 +2032,6 @@ const PixelatePage: React.FC = () => {
         ctx.fillStyle = textColor;
         ctx.textAlign = 'left';
         ctx.fillText(text, textX, textY);
-        // advance by block width only; headerW is already accounted for in textX calculation
-        cursorX += blockW;
       }
 
       // export blob with chosen format/quality
@@ -1831,6 +2050,52 @@ const PixelatePage: React.FC = () => {
     }
   };
 
+  // 仅导出图纸为本地文件（不创建档案记录、不上传）
+  // 使用场景：分享给外部、或单独生成图片去替换已有档案
+  // 文件名优先用图纸名称，没填则用时间戳
+  const handleExportSample = async () => {
+    if (!pixels || pixels.length === 0) {
+      alert('请先生成像素化图再导出');
+      return;
+    }
+    // 背板尺寸校验：与保存档案保持一致
+    if (boardSize > 0 && (boardSize < contentColsForSave || boardSize < contentRowsForSave)) {
+      alert(`背板尺寸 ${boardSize}×${boardSize} 小于图纸内容尺寸 ${contentColsForSave}×${contentRowsForSave}，无法放下。请调大背板尺寸或设为 0 使用自适应裁剪。`);
+      return;
+    }
+    setSavingDrawing(true);
+    try {
+      const statsToUse = (stats && stats.length > 0) ? stats : computeStatsFromPixels(pixels);
+      const effectiveMaxWidth = boardSize > 0 ? Math.max(2400, boardSize * exportMinCellSize) : 2400;
+      const blob = await generateSampleImageBlob(pixels, statsToUse, availableMaterials, { format: exportFormat, quality: exportQuality, minCellSize: exportMinCellSize, maxWidth: effectiveMaxWidth, boardSize, marginMode, cellGridLines, boardRulerEnabled, transparentEmpty, mirror: mirrorExport });
+      if (!blob) {
+        alert('生成图纸失败');
+        return;
+      }
+      const ext = exportFormat === 'png' ? 'png' : 'jpg';
+      const baseName = (saveDrawingName && saveDrawingName.trim()) ? saveDrawingName.trim().replace(/[\\/:*?"<>|]/g, '_') : `pixelate_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}`;
+      const filename = `${baseName}.${ext}`;
+      // 触发浏览器下载图纸图片
+      downloadBlob(blob, filename);
+      // 勾选「同步保存项目文件」时，额外下载 .pindou 项目文件
+      if (syncPindouOnExport && layers && layers.length > 0) {
+        try {
+          const pjson = JSON.stringify(buildProjectData(), null, 2);
+          const pblob = new Blob([pjson], { type: 'application/json' });
+          // 稍延迟触发，避免浏览器把两次下载合并/拦截
+          setTimeout(() => downloadBlob(pblob, `${baseName}.pindou`), 300);
+        } catch (e) {
+          console.warn('同步下载项目文件失败', e);
+        }
+      }
+    } catch (err) {
+      console.error('导出图纸失败', err);
+      alert('导出失败');
+    } finally {
+      setSavingDrawing(false);
+    }
+  };
+
   const handleSaveToDrawings = async () => {
     if (!saveDrawingName || saveDrawingName.trim() === '') {
       alert('请输入图纸名称');
@@ -1838,6 +2103,11 @@ const PixelatePage: React.FC = () => {
     }
     if (!pixels || pixels.length === 0) {
       alert('请先生成像素化图再保存');
+      return;
+    }
+    // 背板尺寸校验：必须能放下当前内容
+    if (boardSize > 0 && (boardSize < contentColsForSave || boardSize < contentRowsForSave)) {
+      alert(`背板尺寸 ${boardSize}×${boardSize} 小于图纸内容尺寸 ${contentColsForSave}×${contentRowsForSave}，无法放下。请调大背板尺寸或设为 0 使用自适应裁剪。`);
       return;
     }
     setSavingDrawing(true);
@@ -1874,7 +2144,9 @@ const PixelatePage: React.FC = () => {
 
       // generate sample image and upload as blueprint (use selected export options)
       // pass explicit maxWidth to control exported image total width (recommended 2400)
-      const blob = await generateSampleImageBlob(pixels, statsToUse, availableMaterials, { format: exportFormat, quality: exportQuality, minCellSize: exportMinCellSize, maxWidth: 2400 });
+      // 当用户设置了背板尺寸时传给生成函数；maxWidth 按背板尺寸自适应放大，避免大背板时 cellSize 太小
+      const effectiveMaxWidth = boardSize > 0 ? Math.max(2400, boardSize * exportMinCellSize) : 2400;
+      const blob = await generateSampleImageBlob(pixels, statsToUse, availableMaterials, { format: exportFormat, quality: exportQuality, minCellSize: exportMinCellSize, maxWidth: effectiveMaxWidth, boardSize, marginMode, cellGridLines, boardRulerEnabled, transparentEmpty, mirror: mirrorExport });
       if (blob) {
         const mime = exportFormat === 'png' ? 'image/png' : 'image/jpeg';
         const ext = exportFormat === 'png' ? 'png' : 'jpg';
@@ -1885,6 +2157,25 @@ const PixelatePage: React.FC = () => {
           await api.post(`/drawings/${drawingId}/images`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
         } catch (err) {
           console.warn('样图上传失败', err);
+        }
+      }
+
+      // 同步上传 .pindou 项目文件，绑定到刚上传的图纸图片（blueprint）
+      // 项目文件按图片存储，需先拿到 blueprint 的 imageId
+      if (layers && layers.length > 0) {
+        try {
+          const detail = await api.get(`/drawings/${drawingId}`);
+          const bp = (detail.data?.images || []).find((im: any) => im.image_type === 'blueprint');
+          if (bp && bp.id) {
+            const pjson = JSON.stringify(buildProjectData(), null, 2);
+            const pblob = new Blob([pjson], { type: 'application/json' });
+            const pfile = new File([pblob], `${(saveDrawingName.trim().replace(/[\\/:*?"<>|]/g, '_')) || 'pixelate'}.pindou`, { type: 'application/json' });
+            const pform = new FormData();
+            pform.append('project', pfile);
+            await api.post(`/drawings/${drawingId}/images/${bp.id}/project-file`, pform, { headers: { 'Content-Type': 'multipart/form-data' } });
+          }
+        } catch (err) {
+          console.warn('项目文件上传失败', err);
         }
       }
 
@@ -1906,12 +2197,9 @@ const PixelatePage: React.FC = () => {
     }
   };
 
-  const handleSaveProject = () => {
-    if (!layers || layers.length === 0) {
-      alert('没有可保存的内容');
-      return;
-    }
-    const data = {
+  // 构建 .pindou 项目数据对象（供下载、保存到档案、上传复用）
+  const buildProjectData = () => {
+    return {
       version: '2.1', // 升级版本号以支持多画笔
       timestamp: Date.now(),
       layers, // 保存图层数据而不是合并后的pixels
@@ -1931,16 +2219,28 @@ const PixelatePage: React.FC = () => {
       // 保存画笔设置
       brushes: exportForProject()
     };
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
+  };
+
+  // 触发浏览器下载一个 Blob（filename 由调用方指定）
+  const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `pixel-project-${Date.now()}.pindou`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const handleSaveProject = () => {
+    if (!layers || layers.length === 0) {
+      alert('没有可保存的内容');
+      return;
+    }
+    const json = JSON.stringify(buildProjectData(), null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    downloadBlob(blob, `pixel-project-${Date.now()}.pindou`);
   };
 
   const handleLoadProject = (file: File) => {
@@ -2291,6 +2591,15 @@ const PixelatePage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 编辑映射按钮 */}
+              <button
+                className="w-full py-1.5 text-xs rounded bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                onClick={() => setMappingEditorVisible(true)}
+                disabled={stats.length === 0}
+              >
+                🎨 编辑颜色映射
+              </button>
+
               {/* 选项复选框 */}
               <div className="flex flex-col space-y-1">
                 <label className="inline-flex items-center">
@@ -2347,7 +2656,7 @@ const PixelatePage: React.FC = () => {
                 <button
                   className="p-2 bg-indigo-600 text-white rounded"
                   onClick={() => setShowSaveDialog(true)}
-                  title="保存至图纸档案"
+                  title="生成图纸（导出 / 保存至档案）"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
                 </button>
@@ -2464,6 +2773,15 @@ const PixelatePage: React.FC = () => {
         {/* stats panel reuse (it renders fixed right panel) */}
         <StatsPanel visible={statsVisible} stats={stats} totalCells={stats.reduce((s, it) => s + (it.count || 0), 0)} onClose={() => setStatsVisible(false)} onSelectMaterial={(pid) => setHighlightedProductId((prev) => (prev === pid ? null : (pid ?? null)))} draggable initialPos={{ left: window.innerWidth - 320 - 20, top: 80 }} highlightedProductId={highlightedProductId} />
 
+        {/* 映射关系编辑弹窗 */}
+        <MappingEditorModal
+          visible={mappingEditorVisible}
+          entries={stats.map((s: any) => ({ productId: s.productId, code: s.code, hex: s.hex || '#CCCCCC', count: s.count }))}
+          availableMaterials={availableMaterials}
+          onClose={() => setMappingEditorVisible(false)}
+          onApply={handleApplyMapping}
+        />
+
         {/* Pixel Toolbar */}
         <PixelToolbar
           position={toolbarPos}
@@ -2559,18 +2877,50 @@ const PixelatePage: React.FC = () => {
           onLayerImport={handleLayerImport}
         />
 
-        {/* Save to Drawings Dialog */}
+        {/* Save / Export Drawing Dialog */}
         {showSaveDialog && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-4">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-medium">保存至图纸档案</h3>
+                <h3 className="text-lg font-medium">生成图纸</h3>
                 <button className="text-gray-500" onClick={() => setShowSaveDialog(false)}>关闭</button>
               </div>
               <div className="space-y-3">
                 <div>
-                  <label className="block text-sm">图纸名称（必填）</label>
-                  <input value={saveDrawingName} onChange={(e) => setSaveDrawingName(e.target.value)} className="mt-1 w-full border rounded p-2" />
+                  <label className="block text-sm">图纸名称（仅"保存至档案"需要填写）<HelpTip text="导出到本地时会作为文件名；留空则用时间戳命名。" /></label>
+                  <input value={saveDrawingName} onChange={(e) => setSaveDrawingName(e.target.value)} className="mt-1 w-full border rounded p-2" placeholder="例如：卡通人物-草莓熊" />
+                </div>
+                <div>
+                  <label className="block text-sm">背板尺寸（边长格数，0 = 自适应裁剪不使用背板）<HelpTip text={`填写后图纸将按 ${boardSize || '—'}×${boardSize || '—'} 背板居中放置，行列坐标从 1 开始计数。当前内容尺寸约 ${contentColsForSave}×${contentRowsForSave}（自动裁剪 + 1 格边距）。`} /></label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={boardSize}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value || '0', 10);
+                        setBoardSize(Number.isFinite(v) ? Math.max(0, v) : 0);
+                      }}
+                      className="w-24 border rounded p-2"
+                    />
+                    <span className="text-xs text-gray-500">常用：</span>
+                    {[52, 78, 104].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={`px-2 py-1 text-xs rounded border ${boardSize === s ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
+                        onClick={() => setBoardSize(s)}
+                      >
+                        {s}×{s}
+                      </button>
+                    ))}
+                  </div>
+                  {boardSize > 0 && (boardSize < contentColsForSave || boardSize < contentRowsForSave) && (
+                    <div className="text-xs text-red-600 mt-1 font-medium">
+                      ⚠ 背板尺寸小于图纸内容尺寸（{contentColsForSave}×{contentRowsForSave}），无法放下，请调大背板尺寸或设为 0 使用自适应裁剪。
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -2580,17 +2930,132 @@ const PixelatePage: React.FC = () => {
                       <option value="png">PNG（无损）</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-sm">JPG质量（0.5-1.0）</label>
-                    <input type="number" step="0.05" min={0.5} max={1} value={exportQuality} onChange={(e) => setExportQuality(Math.max(0.5, Math.min(1, parseFloat(e.target.value || '0.85'))))} className="mt-1 block w-full border rounded p-2" />
+                <div>
+                  <label className="block text-sm">JPG质量（0.5-1.0）</label>
+                  <input type="number" step="0.05" min={0.5} max={1} value={exportQuality} onChange={(e) => setExportQuality(Math.max(0.5, Math.min(1, parseFloat(e.target.value || '0.85'))))} className="mt-1 block w-full border rounded p-2" />
+                </div>
+              </div>
+              {/* 镜像 + 边距模式 */}
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${mirrorExport ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                  <input
+                    type="checkbox"
+                    checked={mirrorExport}
+                    onChange={(e) => setMirrorExport(e.target.checked)}
+                    className="accent-indigo-600"
+                  />
+                  <span className="text-sm">水平镜像</span>
+                  <HelpTip text="勾选后导出的图纸左右翻转像素内容（适合需要镜像复用的对称图案）。坐标标尺、网格框架不翻转。" />
+                </label>
+                <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${syncPindouOnExport ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                  <input
+                    type="checkbox"
+                    checked={syncPindouOnExport}
+                    onChange={(e) => setSyncPindouOnExport(e.target.checked)}
+                    className="accent-indigo-600"
+                  />
+                  <span className="text-sm">同步保存项目文件</span>
+                  <HelpTip text="仅对「仅导出到本地」生效：导出图纸图片的同时，额外下载一份 .pindou 项目文件，可在像素化模块重新加载继续编辑。「保存至档案」始终会一并上传项目文件。" />
+                </label>
+              </div>
+              {/* 边距模式：仅自适应模式生效，背板模式下内容由背板尺寸+居中决定 */}
+              <div className={boardSize > 0 ? 'opacity-50 pointer-events-none' : ''}>
+                <label className="block text-sm">边距模式（仅自适应模式生效）<HelpTip text="留边模式下内容四周各空 1 格；无边模式下内容直接贴画布边缘。" /></label>
+                <div className="flex items-center gap-4 mt-1">
+                  <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${marginMode === 'margin' ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                    <input
+                      type="radio"
+                      name="marginMode"
+                      checked={marginMode === 'margin'}
+                      onChange={() => setMarginMode('margin')}
+                      className="accent-indigo-600"
+                    />
+                    <span className="text-sm">留 1 格边</span>
+                  </label>
+                  <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${marginMode === 'none' ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                    <input
+                      type="radio"
+                      name="marginMode"
+                      checked={marginMode === 'none'}
+                      onChange={() => setMarginMode('none')}
+                      className="accent-indigo-600"
+                    />
+                    <span className="text-sm">无边（贴边）</span>
+                  </label>
+                </div>
+              </div>
+                {/* 格子线 / 背板线开关 */}
+                <div>
+                  <label className="block text-sm">网格线<HelpTip text="两者可独立开关；都关闭则只输出纯像素色块。标尺线统一使用全黑，在彩色像素上对比度最高。" /></label>
+                  <div className="flex flex-col gap-1 mt-1">
+                    <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${cellGridLines ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                      <input
+                        type="checkbox"
+                        checked={cellGridLines}
+                        onChange={(e) => setCellGridLines(e.target.checked)}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm">每格细线（淡，方便数格子）</span>
+                    </label>
+                    <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${boardRulerEnabled ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                      <input
+                        type="checkbox"
+                        checked={boardRulerEnabled}
+                        onChange={(e) => setBoardRulerEnabled(e.target.checked)}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm">背板标尺线（每 10 格粗实线 + 每 5 格粗虚线）</span>
+                    </label>
+                  </div>
+                </div>
+                {/* 空白格棋盘格开关 */}
+                <div>
+                  <label className="block text-sm">空白格样式<HelpTip text="开启棋盘格后没有物料的格子用灰白棋盘格表示，类似 Photoshop 的透明背景效果，方便区分空白区域。" /></label>
+                  <div className="flex flex-col gap-1 mt-1">
+                    <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${!transparentEmpty ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                      <input
+                        type="radio"
+                        name="transparentEmpty"
+                        checked={!transparentEmpty}
+                        onChange={() => setTransparentEmpty(false)}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm">纯色背景（默认浅灰）</span>
+                    </label>
+                    <label className={`flex items-center gap-2 px-3 py-1 border rounded cursor-pointer ${transparentEmpty ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'bg-white border-gray-300 text-gray-700'}`}>
+                      <input
+                        type="radio"
+                        name="transparentEmpty"
+                        checked={transparentEmpty}
+                        onChange={() => setTransparentEmpty(true)}
+                        className="accent-indigo-600"
+                      />
+                      <span className="text-sm">棋盘格（PS 透明效果，灰白交替）</span>
+                    </label>
                   </div>
                 </div>
                 <div className="text-sm text-gray-500">提示：为保证清晰度，导出时每格像素最小为 <strong>{exportMinCellSize}px</strong>，如果需要可在设置中调整。</div>
-                <div className="text-sm text-gray-500">将根据当前颜色统计自动生成 BOM 并创建一条状态为“仅记录”的图纸记录，同时生成并上传样图。</div>
-                <div className="flex items-center justify-end space-x-3">
+                <div className="text-xs text-gray-500 leading-relaxed border-l-2 border-gray-200 pl-2">
+                  <div><strong className="text-gray-700">仅导出到本地</strong>：只生成图纸图片并下载，不创建档案记录。适合分享到外部或替换已有档案。</div>
+                  <div className="mt-1"><strong className="text-gray-700">保存至档案</strong>：自动生成 BOM 清单，创建"仅记录"状态图纸，同时上传样图。</div>
+                </div>
+                <div className="flex items-center justify-end space-x-3 pt-1">
                   <button className="px-3 py-2 bg-gray-200 rounded" onClick={() => setShowSaveDialog(false)}>取消</button>
-                  <button className="px-3 py-2 bg-indigo-600 text-white rounded" onClick={handleSaveToDrawings} disabled={savingDrawing}>
-                    {savingDrawing ? '保存中...' : '保存并生成样图'}
+                  <button
+                    className="px-3 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    onClick={handleExportSample}
+                    disabled={savingDrawing || boardSizeInvalid}
+                    title="只下载图纸图片，不保存到档案"
+                  >
+                    {savingDrawing ? '生成中...' : '仅导出到本地'}
+                  </button>
+                  <button
+                    className="px-3 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    onClick={handleSaveToDrawings}
+                    disabled={savingDrawing || boardSizeInvalid || !saveDrawingName.trim()}
+                    title={!saveDrawingName.trim() ? '请先填写图纸名称' : '创建图纸档案并上传样图'}
+                  >
+                    {savingDrawing ? '保存中...' : '保存至档案'}
                   </button>
                 </div>
               </div>
@@ -2603,5 +3068,17 @@ const PixelatePage: React.FC = () => {
 };
 
 export default PixelatePage;
+
+/** 问号图标 + 鼠标悬停显示说明文字（替代原先常驻的注释行，节省纵向空间） */
+const HelpTip: React.FC<{ text: string }> = ({ text }) => (
+  <span className="relative inline-flex group align-middle ml-1">
+    <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-gray-300 text-white text-[9px] font-bold cursor-help select-none">
+      ?
+    </span>
+    <span className="hidden group-hover:block absolute left-1/2 bottom-full z-50 mb-1 -translate-x-1/2 w-max max-w-xs px-2 py-1 bg-gray-800 text-white text-xs rounded shadow-lg leading-relaxed">
+      {text}
+    </span>
+  </span>
+);
 
 

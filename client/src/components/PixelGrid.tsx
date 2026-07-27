@@ -269,7 +269,7 @@ interface PixelGridProps {
             ctx.fillStyle = textColor;
             // 根据cellSize调整字体大小，确保文字不会太大
             const fontSize = Math.min(cellSize * 0.6, Math.max(8, cellSize * 0.4));
-            ctx.font = `bold ${fontSize}px monospace`;
+            ctx.font = `bold ${fontSize}px "Microsoft YaHei", "微软雅黑", sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             // 在单元格中心绘制文字
@@ -322,27 +322,35 @@ interface PixelGridProps {
 
     // (axis labels for the grid body removed; header labels drawn below)
 
-    // highlight logic: dim non-highlighted
+    // highlight logic: 边框发光高亮匹配的格子，其余格子轻微变暗
     if (highlightedProductId != null) {
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      // 先把所有非匹配格子轻微变暗（保留可读性，不像纯白遮罩那么极端）
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
           const cell = pixels[r][c];
-          // skip empty (removed) cells from highlight/dimming
           if (cell.hex == null) continue;
           if (cell.productId !== highlightedProductId) {
             ctx.fillRect(c * cellSize, r * cellSize, cellSize, cellSize);
-          } else {
-            // draw subtle shadow for highlighted
-            ctx.save();
-            ctx.shadowColor = 'rgba(0,0,0,0.25)';
-            ctx.shadowBlur = 6 / Math.max(scale, 1);
-            ctx.fillStyle = cell.hex || '#FFFFFF';
-            ctx.fillRect(c * cellSize + 0.5, r * cellSize + 0.5, cellSize - 1, cellSize - 1);
-            ctx.restore();
           }
         }
       }
+      // 再给匹配的格子画发光边框
+      ctx.save();
+      ctx.shadowColor = '#00E5FF';
+      ctx.shadowBlur = Math.max(4, 10 / Math.max(scale, 1));
+      ctx.strokeStyle = '#00E5FF';
+      ctx.lineWidth = Math.max(1.5, 2 / Math.max(scale, 1));
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const cell = pixels[r][c];
+          if (cell.hex == null) continue;
+          if (cell.productId === highlightedProductId) {
+            ctx.strokeRect(c * cellSize + 1, r * cellSize + 1, cellSize - 2, cellSize - 2);
+          }
+        }
+      }
+      ctx.restore();
     }
 
     // selection highlight: draw selection borders and overlays
@@ -616,7 +624,11 @@ interface PixelGridProps {
   };
 
   // free select tool logic
-  const handleFreeSelect = (row: number, col: number, e: React.MouseEvent) => {
+  // 注意：传入的 row, col 是数组索引，但 selectedCells / selectStartRef 约定存虚拟坐标。
+  // 入口处统一转成虚拟坐标，后续逻辑全部基于虚拟坐标。
+  const handleFreeSelect = (arrRow: number, arrCol: number, e: React.MouseEvent) => {
+    const row = arrRow + gridOffset.row;
+    const col = arrCol + gridOffset.col;
     const cellKey = `${row},${col}`;
 
     let mode: 'add' | 'remove' | 'toggle' | 'rect' = 'toggle';

@@ -9,6 +9,7 @@ import { useCompletionActions } from '../hooks/useCompletionActions';
 interface Drawing {
   id: number;
   title: string;
+  thumbnail?: string;
 }
 
 interface CompletionRecord {
@@ -302,6 +303,22 @@ const CompletionRecords: React.FC = () => {
                       <div><strong>完工时间：</strong>{r.completed_at ? formatBeijingTimeDate(r.completed_at) : (r.created_at ? formatBeijingTimeDate(r.created_at) : '')}</div>
                       <div><strong>满意度：</strong>{r.satisfaction ? (r.satisfaction === 5 ? '很满意' : r.satisfaction === 4 ? '满意' : r.satisfaction === 3 ? '一般' : r.satisfaction === 2 ? '不满意' : '很不满意') : '未填写'}</div>
                       <div className="text-xs text-gray-500">{r.created_at ? formatBeijingTimeShort(r.created_at) : ''}</div>
+                    </div>
+                    {/* 原图纸预览图 */}
+                    <div className="flex flex-col items-center">
+                      <div className="text-xs text-gray-500 mb-1">原图纸</div>
+                      {drawing?.thumbnail ? (
+                        <img
+                          src={encodeURI(`/uploads/drawings/${drawing.thumbnail}`)}
+                          alt="原图纸"
+                          loading="lazy"
+                          decoding="async"
+                          className="w-24 h-24 object-cover rounded cursor-pointer border"
+                          onClick={() => openImageModal(drawing.thumbnail)}
+                        />
+                      ) : (
+                        <div className="w-24 h-24 flex items-center justify-center text-xs text-gray-400 bg-gray-50 rounded border">无图纸图</div>
+                      )}
                     </div>
                     <div className="flex flex-col items-end space-y-2">
                       <div className="flex space-x-2">

@@ -89,3 +89,10 @@ server/models/
 *.env副本
 # 旧版本发布包
 pindou-system-release.zip
+
+# 临时/调试/备份文件
+.zcode/
+server/debug/
+server/database.sqlite.bak-*
+server/fix-mojibake-paths.js
+测试像素化图片/

@@ -16,6 +16,8 @@ const getBaseDir = () => {
 const baseDir = getBaseDir();
 
 // 支持通过环境变量配置数据目录（Docker 部署时使用）
+// DB 和 uploads 默认都放在 data/ 下，保持路径一致（避免数据库指向 data/uploads 但
+// Express 从 server/uploads 读的不一致问题）
 const dataDir = process.env.DATA_DIR || path.join(baseDir, 'data/database');
 const dbPath = path.join(dataDir, 'database.sqlite');
 
@@ -25,8 +27,8 @@ if (!fs.existsSync(dataDir)) {
 }
 const db = new sqlite3.Database(dbPath);
 
-// 创建上传目录
-const uploadsDir = process.env.UPLOADS_DIR || path.join(baseDir, 'server/uploads');
+// 创建上传目录：与数据库目录保持同级，避免数据库引用与静态服务路径错位
+const uploadsDir = process.env.UPLOADS_DIR || path.join(baseDir, 'data/uploads');
 const drawingsDir = path.join(uploadsDir, 'drawings');
 
 if (!fs.existsSync(uploadsDir)) {
@@ -171,6 +173,23 @@ function initializeDatabase() {
       FOREIGN KEY (drawing_id) REFERENCES drawings(id) ON DELETE CASCADE,
       FOREIGN KEY (product_id) REFERENCES products(id),
       UNIQUE(drawing_id, product_id)
+    )`);
+
+    // 图片项目文件表（每张图纸图片最多一个 .pindou 项目文件）
+    // 旧版本曾以 drawing_id 为唯一键（每图纸一个），现改为按 image_id（每图片一个）。
+    // 旧表结构不兼容，直接 DROP 重建（该功能为新引入，无生产数据需保留）。
+    db.run(`DROP TABLE IF EXISTS drawing_project_files`);
+    db.run(`CREATE TABLE IF NOT EXISTS drawing_project_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      image_id INTEGER NOT NULL UNIQUE,
+      drawing_id INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      file_name TEXT,
+      file_size INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (image_id) REFERENCES drawing_images(id) ON DELETE CASCADE,
+      FOREIGN KEY (drawing_id) REFERENCES drawings(id) ON DELETE CASCADE
     )`);
 
     // 消耗记录表
